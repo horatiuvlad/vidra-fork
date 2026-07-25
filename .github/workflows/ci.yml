@@ -8,6 +8,9 @@ on:
   # Lets a branch be exercised without opening a PR — useful when the change
   # being tested *is* the workflow.
   workflow_dispatch:
+  # Callable as a gate by other workflows (see release-nuget.yml), so a release
+  # cannot publish from a commit that hasn't passed this suite.
+  workflow_call:
 
 jobs:
   # Fast, deterministic tier: runs every unit, contract, and scaffold
@@ -281,6 +284,12 @@ jobs:
       - name: Build the dogfood host (${{ matrix.tfm }})
         shell: bash
         run: |
+          # The host's post-build codegen target shells out to
+          # `dotnet run --no-build --project Vidra.CodeGen`, which requires the
+          # tool to already be built — true after a solution build, not in a
+          # clean checkout. Build it first so this step tests the host rather
+          # than that ordering quirk.
+          dotnet build src/tools/Vidra.CodeGen/Vidra.CodeGen.csproj -c Debug
           dotnet build src/host/Vidra.Host.Maui/Vidra.Host.Maui.csproj \
             -c Debug -f ${{ matrix.tfm }}
 
@@ -400,6 +409,11 @@ jobs:
         shell: pwsh
         run: ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT"
 
+      # Uploaded even on failure, since a broken installer is worth inspecting.
+      # Staying lenient here is deliberate: the strict gate is the
+      # "Verify a distributable artifact was produced" step above, which asserts
+      # exactly one artifact of the expected type. Making the upload strict too
+      # would bury an earlier real failure under a second, confusing one.
       - name: Upload packaged installer
         if: always()
         uses: actions/upload-artifact@v4
