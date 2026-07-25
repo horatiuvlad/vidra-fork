@@ -273,6 +273,22 @@ describe("verifyWindowsSignature — untrusted roots", () => {
     expect(result.untrustedRoot).toBe(true);
   });
 
+  // Verbatim from a real runner: signtool hard-wraps mid-sentence, so a naive
+  // regex for "root certificate which is not trusted" never matches and a
+  // correctly signed build is reported as unsigned.
+  it("matches the message even though signtool wraps it mid-sentence", () => {
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] !== "verify") return "";
+      throw Object.assign(new Error("x"), {
+        stderr:
+          "SignTool Error: A certificate chain processed, but terminated in a root\n\tcertificate which is not trusted by the trust provider.\n",
+      });
+    });
+    const result = verifyWindowsSignature("app.exe");
+    expect(result.untrustedRoot).toBe(true);
+    expect(result.ok).toBe(true);
+  });
+
   it("still reports a genuinely unsigned binary as a failure", () => {
     execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args?.[0] !== "verify") return "";

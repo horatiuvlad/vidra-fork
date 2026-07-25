@@ -156,10 +156,13 @@ export const verifyWindowsSignature = (
     return { ok: true, untrustedRoot: false, output: output ?? "" };
   } catch (error) {
     const output = formatExecError(error);
-    // CERT_E_UNTRUSTEDROOT — signed correctly, just not by anyone Windows trusts.
+    // CERT_E_UNTRUSTEDROOT — signed correctly, just not by anyone Windows
+    // trusts. signtool hard-wraps its messages mid-sentence, so collapse
+    // whitespace before matching; the hex code is often absent entirely.
+    const flat = output.replace(/\s+/g, " ");
     const untrustedRoot =
-      /0x800B0109/i.test(output) ||
-      /terminated in a root certificate which is not trusted/i.test(output);
+      /0x800B0109/i.test(flat) ||
+      /terminated in a root certificate which is not trusted/i.test(flat);
     return { ok: untrustedRoot, untrustedRoot, output };
   }
 };
