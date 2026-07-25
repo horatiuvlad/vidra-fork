@@ -72,10 +72,17 @@ security set-key-partition-list \
 # trust, and `spctl` is expected to reject a self-signed build anyway.
 echo "==> identity left untrusted (expected: spctl will reject, codesign will not)"
 
-echo "==> identities now visible to codesign:"
-security find-identity -v -p codesigning "$KEYCHAIN"
+# NB: `find-identity -v` lists only identities whose certificate chain
+# *validates*, which a self-signed certificate never does without a trusted
+# root — it would report "0 valid identities found" even though the identity is
+# present and perfectly usable. codesign does not require chain trust to sign,
+# so check the unfiltered list instead.
+echo "==> identities in $KEYCHAIN (unfiltered):"
+security find-identity -p codesigning "$KEYCHAIN"
+echo "==> identities considered 'valid' (expected to be empty for a self-signed root):"
+security find-identity -v -p codesigning "$KEYCHAIN" || true
 
-if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -q "$IDENTITY_CN"; then
+if ! security find-identity -p codesigning "$KEYCHAIN" | grep -q "$IDENTITY_CN"; then
   echo "::error::self-signed identity was not registered in $KEYCHAIN"
   exit 1
 fi
