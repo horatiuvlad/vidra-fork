@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Lets a branch be exercised without opening a PR — useful when the change
+  # being tested *is* the workflow.
+  workflow_dispatch:
 
 jobs:
   # Fast, deterministic tier: runs every unit, contract, and scaffold
