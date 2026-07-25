@@ -41,8 +41,13 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> starting: vidra dev --target $TARGET"
-setsid node "$CLI" dev --target "$TARGET" >"$LOG" 2>&1 &
+# `setsid` is util-linux and does not exist on macOS. Enabling job control makes
+# bash place the background job in its own process group with the child as
+# leader, which gives us the same `kill -- -PID` teardown portably.
+set -m
+node "$CLI" dev --target "$TARGET" >"$LOG" 2>&1 &
 DEV_PID=$!
+set +m
 
 waited=0
 while [ "$waited" -lt "$READY_TIMEOUT" ]; do

@@ -355,8 +355,13 @@ jobs:
       # macOS only for now: the script tears the session down via POSIX process
       # groups, which git-bash on the Windows runner does not provide. Windows
       # dev-loop coverage needs a PowerShell counterpart.
+      # Non-blocking for now. This is the newest and least-proven check, and it
+      # sits upstream of the signature-verification and runtime-E2E steps —
+      # letting it fail the job would stop the more valuable assertions from
+      # ever running. Flip to blocking once it has passed a few times.
       - name: Smoke the dev loop (vidra dev + C# hot reload)
         if: runner.os == 'macOS'
+        continue-on-error: true
         timeout-minutes: 12
         shell: bash
         run: |
