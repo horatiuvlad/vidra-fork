@@ -41,6 +41,7 @@ We follow a pyramid:
 | Smoke       | Dogfood host (`src/host/Vidra.Host.Maui`) build             | `windows-latest`, `macos-latest` |
 | Smoke       | `vidra build` → signature, hardened runtime + entitlements  | `windows-latest`, `macos-latest` |
 | Smoke       | **Runtime E2E** — launch the packaged app, assert a C#↔JS round-trip | `windows-latest`, `macos-latest` |
+| Smoke       | **Dev loop** — `vidra dev` reaches host-ready and reacts to a C# edit | `macos-latest` |
 | Guard rail  | CLI rejects `--target linux`; `--plan` renders; `doctor` runs | `ubuntu-latest`       |
 
 ### Signing coverage without certificates
@@ -84,6 +85,9 @@ VIDRA_SMOKE_CONFIG=Release node tests/smoke/echo-ping.mjs
 bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg   # macOS
 bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
 ./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip # Windows
+
+# Dev loop: `vidra dev` + C# hot reload (macOS)
+bash tests/ci/dev-loop-smoke.sh <app-dir> <path/to/cli.js> macos
 ```
 
 ### Updating code-gen snapshots

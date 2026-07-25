@@ -346,6 +346,25 @@ jobs:
         shell: pwsh
         run: ./tests/ci/windows-selfsigned-cert.ps1
 
+      # ---- Dev-loop smoke: `vidra dev` and C# hot reload ----
+      #
+      # Runs before the E2E MainPage is installed, so it exercises the normal
+      # template page (the E2E variant exits the process on success, which would
+      # end the dev session immediately).
+      #
+      # macOS only for now: the script tears the session down via POSIX process
+      # groups, which git-bash on the Windows runner does not provide. Windows
+      # dev-loop coverage needs a PowerShell counterpart.
+      - name: Smoke the dev loop (vidra dev + C# hot reload)
+        if: runner.os == 'macOS'
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          bash tests/ci/dev-loop-smoke.sh \
+            "${{ runner.temp }}/vidra-smoke" \
+            "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            ${{ matrix.target }}
+
       # ---- Runtime E2E harness ----
       #
       # Swap the scaffolded app's MainPage for one that calls into JavaScript

@@ -16,6 +16,7 @@ ever launched the app.
 | `verify-macos-artifact.sh` | macOS | Asserts the signature, hardened runtime and entitlements of a built `.dmg` |
 | `launch-macos-app.sh` | macOS | Mounts the `.dmg`, launches the app, and asserts a real bridge round-trip |
 | `launch-windows-app.ps1` | Windows | Unzips, checks the Authenticode signature, launches, and asserts the same |
+| `dev-loop-smoke.sh` | macOS | Starts `vidra dev`, waits for the host-ready sentinel, and asserts the watcher reacts to a C# edit |
 | `npm-publish.sh` | any | Publishes an npm package idempotently (used by `release-npm.yml`) |
 
 ## Why self-signed certificates work here
@@ -92,6 +93,29 @@ sed 's/__PROJECT_NAMESPACE__/MyApp/' tests/smoke/e2e-main-page.cs.in \
 Without `VIDRA_E2E_PROOF` set, that page behaves like the normal template page,
 so it is harmless if left in place.
 
+## The dev-loop smoke
+
+`dev-loop-smoke.sh` covers `vidra dev` and C# hot reload, which previously had no
+automated coverage at all — unit tests cover argument construction and log
+classification, but nothing ever started a real session.
+
+It asserts two things, both time-bounded:
+
+1. the session reaches the `[vidra] host ready` sentinel that `VidraPage` prints
+   when `VIDRA_DEV_URL` is set — proving Vite started, the host built under
+   `dotnet watch`, launched, and loaded the dev server;
+2. touching a C# file makes the watcher *react*.
+
+It deliberately does not assert *how* the edit is applied. Whether a change lands
+as a hot-reload delta or forces a restart depends on the installed workload set,
+and Vidra falls back to a classic launch on older toolchains — both are correct
+outcomes, so pinning one would make the test lie.
+
+It runs before the E2E MainPage is installed, since that variant exits the
+process on success and would end the session immediately. **macOS only:** the
+teardown uses POSIX process groups, which git-bash on the Windows runner does not
+provide.
+
 ## Environment variables
 
 | Variable | Used by | Purpose |
@@ -101,4 +125,6 @@ so it is harmless if left in place.
 | `VIDRA_CI_IDENTITY_CN` | `macos-selfsigned-identity.sh` | Common name of the generated identity |
 | `VIDRA_CI_KEYCHAIN` / `VIDRA_CI_KEYCHAIN_PASSWORD` | `macos-selfsigned-identity.sh` | Temporary keychain name and password |
 | `VIDRA_CI_CERT_SUBJECT` | `windows-selfsigned-cert.ps1` | Subject of the generated certificate |
+| `VIDRA_DEV_READY_TIMEOUT` | `dev-loop-smoke.sh` | Seconds to wait for the host-ready sentinel (default 300) |
+| `VIDRA_DEV_RELOAD_TIMEOUT` | `dev-loop-smoke.sh` | Seconds to wait for the watcher to react (default 120) |
 | `PUSH` / `PROVENANCE` / `NODE_AUTH_TOKEN` | `npm-publish.sh` | Publish for real, attach provenance, npm auth |
