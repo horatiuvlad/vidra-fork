@@ -22,17 +22,15 @@ $cert = New-SelfSignedCertificate `
 $thumbprint = $cert.Thumbprint
 Write-Host "==> thumbprint: $thumbprint"
 
-# Trusting the cert is best-effort — it only affects local verification, and
-# signing works regardless.
-try {
-    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
-    $store.Open("ReadWrite")
-    $store.Add($cert)
-    $store.Close()
-    Write-Host "==> installed into the CurrentUser Root store"
-} catch {
-    Write-Host "note: could not install trust settings ($($_.Exception.Message)) — signing still works"
-}
+# Deliberately NOT added to the Root store. Adding a certificate to the trusted
+# root store raises an interactive "do you want to install this certificate?"
+# confirmation dialog, which on a headless runner nobody can answer — it simply
+# hangs until the job times out.
+#
+# Trust is unnecessary anyway: signtool signs from the CurrentUser\My store via
+# the thumbprint, and launch-windows-app.ps1 already accepts an UntrustedRoot
+# signature as valid for this purpose.
+Write-Host "==> certificate left in CurrentUser\My (untrusted root is expected)"
 
 if ($env:GITHUB_ENV) {
     "VIDRA_WINDOWS_CERT_THUMBPRINT=$thumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

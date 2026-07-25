@@ -50,11 +50,12 @@ security set-key-partition-list \
   -S apple-tool:,apple:,codesign: \
   -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
 
-# Trusting the root is best-effort: signing works without it, and it only
-# affects local verification, so a failure here must not fail the job.
-sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain "$WORKDIR/cert.pem" 2>/dev/null \
-  || echo "note: could not install trust settings (signing still works)"
+# Deliberately NOT installed as a trusted root. Trust settings can raise an
+# interactive confirmation, which on a headless runner hangs until the job times
+# out — and they buy nothing here: codesign signs from the keychain regardless,
+# `codesign --verify --strict` checks internal consistency rather than chain
+# trust, and `spctl` is expected to reject a self-signed build anyway.
+echo "==> identity left untrusted (expected: spctl will reject, codesign will not)"
 
 echo "==> identities now visible to codesign:"
 security find-identity -v -p codesigning "$KEYCHAIN"

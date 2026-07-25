@@ -19,10 +19,25 @@
     <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
     <EnableCodeSigning Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">true</EnableCodeSigning>
     <!--
-      Entitlements for the hardened runtime (which notarization requires).
-      `vidra build` re-signs the bundle with this same file; pointing MAUI at it
-      too keeps both signing passes consistent. See Entitlements.plist for why
-      each key is there.
+      Entitlements for the hardened runtime, which notarization requires and
+      which would otherwise kill .NET's JIT. `vidra build` re-signs the bundle
+      with this same file, so pointing MAUI at it keeps both passes consistent.
+
+      What Entitlements.plist grants (it carries no comments of its own — the
+      MacCatalyst SDK's plist parser rejects XML comments inside <dict>):
+        allow-jit + allow-unsigned-executable-memory  .NET compiles to
+                                                      writable-then-executable memory
+        disable-library-validation                    the runtime loads dylibs
+                                                      signed by another team
+        network.client                                the WebView reaches the
+                                                      Vite dev server
+        files.user-selected.read-write                filePicker hands back paths
+                                                      the app then reads
+        app-sandbox = false                           Vidra's filesystem module
+                                                      exposes unrestricted paths;
+                                                      Developer ID (unlike the App
+                                                      Store) does not require the
+                                                      sandbox
     -->
     <CodesignEntitlements Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">Entitlements.plist</CodesignEntitlements>
 

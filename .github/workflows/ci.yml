@@ -24,6 +24,7 @@ jobs:
   unit-and-contract:
     name: Unit + contract (ubuntu-latest)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -185,6 +186,10 @@ jobs:
             target: macos
             artifact-ext: dmg
     runs-on: ${{ matrix.os }}
+    # Caps a hung step. The self-signed certificate steps are the risk: adding a
+    # cert to a trusted root store raises an interactive confirmation that a
+    # headless runner can never answer.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -330,11 +335,13 @@ jobs:
 
       # ---- Signing identity (throwaway, self-signed) ----
       - name: Create a self-signed signing identity (macOS)
+        timeout-minutes: 5
         if: runner.os == 'macOS'
         shell: bash
         run: bash tests/ci/macos-selfsigned-identity.sh
 
       - name: Create a self-signed signing certificate (Windows)
+        timeout-minutes: 5
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./tests/ci/windows-selfsigned-cert.ps1
@@ -400,11 +407,13 @@ jobs:
         run: bash tests/ci/verify-macos-artifact.sh "$ARTIFACT"
 
       - name: Launch the packaged app and prove the bridge works (macOS)
+        timeout-minutes: 10
         if: runner.os == 'macOS'
         shell: bash
         run: bash tests/ci/launch-macos-app.sh "$ARTIFACT"
 
       - name: Verify the signature, launch, and prove the bridge works (Windows)
+        timeout-minutes: 10
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT"
