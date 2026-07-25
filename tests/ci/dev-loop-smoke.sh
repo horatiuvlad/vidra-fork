@@ -23,7 +23,13 @@ CLI="${2:?missing cli.js path}"
 TARGET="${3:?missing target}"
 
 READY_TIMEOUT="${VIDRA_DEV_READY_TIMEOUT:-300}"
-RELOAD_TIMEOUT="${VIDRA_DEV_RELOAD_TIMEOUT:-120}"
+RELOAD_TIMEOUT="${VIDRA_DEV_RELOAD_TIMEOUT:-90}"
+
+# dotnet watch's default file watcher relies on native filesystem notifications,
+# which routinely fail to fire for a working directory on a CI runner — the
+# session sits in "Waiting for a file to change" and never notices an edit.
+# Polling is slower but deterministic, which is the right trade for a test.
+export DOTNET_USE_POLLING_FILE_WATCHER="${DOTNET_USE_POLLING_FILE_WATCHER:-1}"
 
 # What we can assert today is that the watch session comes up: Vite serves, the
 # host project builds under `dotnet watch`, and the watcher arms itself.
@@ -108,6 +114,7 @@ fi
 echo "==> editing $MAIN_PAGE"
 before="$(wc -l < "$LOG")"
 printf '\n// touched by dev-loop-smoke at build time\n' >> "$MAIN_PAGE"
+touch "$MAIN_PAGE"
 
 waited=0
 reacted=0
@@ -126,6 +133,9 @@ sed -e 's/^/    /' "$LOG" | tail -40
 
 if [ "$reacted" -ne 1 ]; then
   echo "::error::the watcher did not react to a C# edit within ${RELOAD_TIMEOUT}s"
+  echo "    (DOTNET_USE_POLLING_FILE_WATCHER=${DOTNET_USE_POLLING_FILE_WATCHER})"
+  echo "---- output produced after the edit ----"
+  tail -n +"$before" "$LOG" | sed -e 's/^/    /' | tail -20
   exit 1
 fi
 
