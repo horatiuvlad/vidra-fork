@@ -247,3 +247,41 @@ describe("findPrimaryExecutable", () => {
     expect(findPrimaryExecutable("/no/such/dir", "X")).toBeNull();
   });
 });
+
+describe("verifyWindowsSignature — untrusted roots", () => {
+  beforeEach(() => {
+    execFileSyncMock.mockReset();
+    clearEnv();
+  });
+
+  // A self-signed certificate signs perfectly well; it just doesn't chain to a
+  // CA. `signtool verify /pa` conflates "is it signed and intact" with "is the
+  // issuer trusted", so an untrusted root must not read as an unsigned binary —
+  // that would fail CI for a correctly signed build.
+  it("treats CERT_E_UNTRUSTEDROOT as signed-but-untrusted, not unsigned", () => {
+    // The first call is signtool discovery (`signtool /?`); only the verify
+    // itself must fail, otherwise we'd be testing "signtool not found".
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] !== "verify") return "";
+      throw Object.assign(new Error("x"), {
+        stderr:
+          "SignTool Error: A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider. (0x800B0109)",
+      });
+    });
+    const result = verifyWindowsSignature("app.exe");
+    expect(result.ok).toBe(true);
+    expect(result.untrustedRoot).toBe(true);
+  });
+
+  it("still reports a genuinely unsigned binary as a failure", () => {
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] !== "verify") return "";
+      throw Object.assign(new Error("x"), {
+        stderr: "SignTool Error: No signature found. (0x800B0100)",
+      });
+    });
+    const result = verifyWindowsSignature("app.exe");
+    expect(result.ok).toBe(false);
+    expect(result.untrustedRoot).toBe(false);
+  });
+});

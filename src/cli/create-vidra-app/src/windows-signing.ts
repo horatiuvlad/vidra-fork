@@ -123,19 +123,44 @@ export const signWindowsBinariesIfPossible = (
   }
 };
 
+export interface WindowsSignatureVerification {
+  /** A signature is present and intact. */
+  ok: boolean;
+  /** The signature is valid but its chain does not reach a trusted root. */
+  untrustedRoot: boolean;
+  output: string;
+}
+
+/**
+ * `signtool verify /pa` answers two different questions at once: *is the binary
+ * signed and intact?* and *does the certificate chain to a trusted root?* It
+ * fails on the second even when the first is perfectly satisfied — which is
+ * always the case for a self-signed certificate.
+ *
+ * We treat signature presence and integrity as the pass criterion and chain
+ * trust as advisory, mirroring how `spctl` is reported rather than asserted on
+ * macOS. Trust is earned from a certificate authority, not from the build.
+ */
 export const verifyWindowsSignature = (
   target: string,
-): { ok: boolean; output: string } => {
+): WindowsSignatureVerification => {
   const signtool = resolveSignTool();
-  if (!signtool) return { ok: false, output: "signtool.exe not found" };
+  if (!signtool) {
+    return { ok: false, untrustedRoot: false, output: "signtool.exe not found" };
+  }
   try {
     const output = execFileSync(signtool, ["verify", "/pa", "/v", target], {
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
     });
-    return { ok: true, output: output ?? "" };
+    return { ok: true, untrustedRoot: false, output: output ?? "" };
   } catch (error) {
-    return { ok: false, output: formatExecError(error) };
+    const output = formatExecError(error);
+    // CERT_E_UNTRUSTEDROOT — signed correctly, just not by anyone Windows trusts.
+    const untrustedRoot =
+      /0x800B0109/i.test(output) ||
+      /terminated in a root certificate which is not trusted/i.test(output);
+    return { ok: untrustedRoot, untrustedRoot, output };
   }
 };
 

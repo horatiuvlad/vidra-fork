@@ -144,9 +144,11 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
           glyph: verified.ok ? "done" : "manual",
           label: "verify sig",
           labelWidth: LABEL_WIDTH,
-          detail: verified.ok
-            ? dim("authenticode signature verified")
-            : dim("signature did not verify \u2014 see signtool output"),
+          detail: verified.untrustedRoot
+            ? dim("signature intact; chain not trusted (expected for a self-signed certificate)")
+            : verified.ok
+              ? dim("authenticode signature verified and trusted")
+              : dim("signature did not verify \u2014 see signtool output"),
         }),
       );
     }

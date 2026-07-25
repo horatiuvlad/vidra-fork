@@ -173,7 +173,11 @@ const verifyWindowsArtifact = (artifact: string): string[] => {
   report(
     sig.ok,
     "authenticode",
-    sig.ok ? "signature verified" : "not signed or not verifiable",
+    sig.untrustedRoot
+      ? "signed and intact; chain not trusted (expected for a self-signed certificate)"
+      : sig.ok
+        ? "signature verified and trusted"
+        : "not signed or not verifiable",
     sig.output,
   );
   if (!sig.ok) failures.push("authenticode");
