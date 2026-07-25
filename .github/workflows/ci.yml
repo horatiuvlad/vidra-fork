@@ -43,6 +43,18 @@ jobs:
             src/cli/create-vidra-app/package-lock.json
             src/sdk/vidra-js/package-lock.json
 
+      # NuGet restore dominates the per-OS jobs — on Windows the dogfood host
+      # spent ~115s restoring and only ~20s compiling. The packages are keyed by
+      # the project files, so a hit makes every later restore in the job (the
+      # dogfood host, pack-local.sh, the scaffolded app) essentially free.
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', 'pack-local.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
       # ---- C# unit + contract + codegen snapshots ----
       - name: Restore C# test projects
         run: |
@@ -207,6 +219,18 @@ jobs:
           cache-dependency-path: |
             src/cli/create-vidra-app/package-lock.json
             src/sdk/vidra-js/package-lock.json
+
+      # NuGet restore dominates the per-OS jobs — on Windows the dogfood host
+      # spent ~115s restoring and only ~20s compiling. The packages are keyed by
+      # the project files, so a hit makes every later restore in the job (the
+      # dogfood host, pack-local.sh, the scaffolded app) essentially free.
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', 'pack-local.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
       # Pin xcode-select to the newest Xcode actually present on the
       # runner image. As of this writing the macos-latest image tops out
