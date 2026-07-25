@@ -27,9 +27,24 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
   -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning"
 
-openssl pkcs12 -export \
-  -inkey "$WORKDIR/key.pem" -in "$WORKDIR/cert.pem" \
+# OpenSSL 3 defaults to AES-256-CBC with a SHA-256 MAC, which Apple's
+# `security` tool cannot read — it fails with:
+#   SecKeychainItemImport: MAC verification failed during PKCS12 import
+# The legacy provider restores the 3DES/SHA-1 encoding macOS expects. LibreSSL
+# (/usr/bin/openssl) has no -legacy flag but already writes the old format, so
+# fall back to a plain export there.
+p12_args=(pkcs12 -export
+  -inkey "$WORKDIR/key.pem" -in "$WORKDIR/cert.pem"
   -out "$WORKDIR/identity.p12" -passout "pass:$KEYCHAIN_PASSWORD"
+  -macalg sha1)
+
+if openssl "${p12_args[@]}" -legacy 2>/dev/null; then
+  echo "    (exported with the OpenSSL legacy provider)"
+else
+  rm -f "$WORKDIR/identity.p12"
+  openssl "${p12_args[@]}"
+  echo "    (exported with the default provider)"
+fi
 
 echo "==> importing into a temporary keychain"
 security delete-keychain "$KEYCHAIN" 2>/dev/null || true

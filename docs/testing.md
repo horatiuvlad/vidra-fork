@@ -78,6 +78,12 @@ cd src/cli/create-vidra-app && npm install && npm test
 # Bridge echo-ping smoke (any OS)
 dotnet build tests/dotnet/Vidra.Bridge.Smoke/Vidra.Bridge.Smoke.csproj -c Release
 VIDRA_SMOKE_CONFIG=Release node tests/smoke/echo-ping.mjs
+
+# Runtime end-to-end: launch a packaged app and prove the bridge works.
+# Run after `vidra build` on the matching OS. See tests/ci/README.md.
+bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg   # macOS
+bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
+./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip # Windows
 ```
 
 ### Updating code-gen snapshots
