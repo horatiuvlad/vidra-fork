@@ -1,0 +1,65 @@
+// End-to-end runtime proof for the packaged app, used only by CI.
+//
+// The packaging smoke proves an installer lands on disk; this proves the thing
+// inside it actually works. CI copies this file over the scaffolded app's
+// MainPage.cs (substituting __PROJECT_NAMESPACE__) before `vidra build`, then
+// launches the packaged binary and asserts the proof file appeared.
+//
+// A successful run exercises the whole chain in a *production* build:
+//   bundled wwwroot loaded -> SDK initialized -> protocol-v2 fingerprint
+//   handshake accepted -> JS handler registered -> C# called into JS via the
+//   typed contract -> typed result returned.
+//
+// Without VIDRA_E2E_PROOF set it behaves like the normal template page, so the
+// file is harmless if a human ever runs it.
+
+using Vidra.Hosting;
+
+namespace __PROJECT_NAMESPACE__;
+
+public class MainPage : VidraPage
+{
+    private const int MaxAttempts = 60;
+
+    public MainPage()
+    {
+        var proofPath = Environment.GetEnvironmentVariable("VIDRA_E2E_PROOF");
+        if (string.IsNullOrEmpty(proofPath))
+        {
+            return;
+        }
+
+        _ = RunProofAsync(proofPath);
+    }
+
+    private async Task RunProofAsync(string proofPath)
+    {
+        // The WebView has to load, boot the SDK, complete the handshake and
+        // register its handlers before a JS contract call can succeed, so poll
+        // rather than assuming a fixed warm-up time.
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            try
+            {
+                var count = await Bridge.Js().Counter.IncrementAsync();
+                File.WriteAllText(proofPath, count.ToString());
+                Console.WriteLine($"[vidra-e2e] bridge round-trip ok on attempt {attempt}: {count}");
+                Console.Out.Flush();
+                Environment.Exit(0);
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (attempt == MaxAttempts)
+                {
+                    Console.Error.WriteLine($"[vidra-e2e] FAILED after {attempt} attempts: {ex}");
+                    Console.Error.Flush();
+                    Environment.Exit(1);
+                    return;
+                }
+            }
+        }
+    }
+}

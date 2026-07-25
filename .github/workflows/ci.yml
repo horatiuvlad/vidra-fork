@@ -11,6 +11,10 @@ jobs:
   # integration test on a single Linux runner. All C# projects under
   # tests/dotnet/** target net10.0 (non-MAUI) so MAUI workloads are not
   # required here.
+  #
+  # Linux is a *build host*, not a Vidra target — there is no Linux app to
+  # package — so this tier covers framework correctness and the CLI's
+  # platform guard rails, and leaves artifacts to the per-OS smoke tier.
   unit-and-contract:
     name: Unit + contract (ubuntu-latest)
     runs-on: ubuntu-latest
@@ -97,6 +101,46 @@ jobs:
         working-directory: src/cli/create-vidra-app
         run: npm run build
 
+      # ---- CLI behaviour on an unsupported platform ----
+      #
+      # Linux is detected by the CLI but has no build target. These assertions
+      # pin the guard rails so the failure stays a clear message instead of
+      # becoming a stack trace or, worse, a partial build.
+      - name: Assert the CLI rejects Linux as a build target
+        run: |
+          set +e
+          output=$(node src/cli/create-vidra-app/dist/cli.js build --target linux 2>&1)
+          code=$?
+          set -e
+          echo "$output"
+          if [ $code -eq 0 ]; then
+            echo "::error::vidra build --target linux should exit non-zero"
+            exit 1
+          fi
+          echo "$output" | grep -qi "unsupported target" || {
+            echo "::error::expected an 'unsupported target' message"; exit 1; }
+
+      - name: Run vidra doctor
+        run: |
+          set +e
+          node src/cli/create-vidra-app/dist/cli.js doctor
+          echo "doctor exit: $?"
+
+      # `--plan` returns before the MAUI workload gate, so the preview renders
+      # for both desktop targets on a Linux runner with no workloads installed.
+      - name: Assert vidra build --plan renders for both targets
+        run: |
+          cd "$RUNNER_TEMP"
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/index.js" \
+            plan-smoke --app-id=com.vidra.plansmoke
+          cd plan-smoke
+          for target in macos windows; do
+            output=$(node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" build --target "$target" --plan)
+            echo "$output"
+            echo "$output" | grep -q "nothing has run" || {
+              echo "::error::--plan for $target did not render the dry-run footer"; exit 1; }
+          done
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -105,14 +149,18 @@ jobs:
           path: "**/TestResults/*.trx"
           if-no-files-found: ignore
 
-  # Per-OS smoke tier: prove that (a) the real C# bridge wire format
-  # round-trips correctly through stdio on each target OS using the
-  # Vidra.Bridge.Smoke harness and the tests/smoke/echo-ping.mjs driver,
-  # and (b) the scaffolded template from create-vidra-app builds end-to-end
-  # against locally-packed NuGets for the platform-native TFM.
+  # Per-OS smoke tier. Proves, on each target OS, that:
+  #   (a) the real C# bridge wire format round-trips over stdio,
+  #   (b) the framework's own dogfood host still builds,
+  #   (c) the scaffolded template builds end-to-end against locally-packed NuGets,
+  #   (d) `vidra build` produces a correctly signed installer, and
+  #   (e) the app inside that installer actually launches and completes a
+  #       C# <-> JS bridge round-trip.
   #
-  # MAUI workloads are only installed for the template build step; the
-  # bridge echo-ping smoke itself targets net10.0 and needs no workload.
+  # (d) and (e) use a throwaway self-signed certificate. Apple's and Microsoft's
+  # trust chains matter for notarization and SmartScreen reputation, not for
+  # producing and verifying a signature — so the entire signing path is covered
+  # here without any paid certificate.
   smoke:
     name: Smoke (${{ matrix.os }})
     needs: unit-and-contract
@@ -124,10 +172,12 @@ jobs:
             tfm: net10.0-windows10.0.19041.0
             maui-workload: maui-windows
             target: windows
+            artifact-ext: zip
           - os: macos-latest
             tfm: net10.0-maccatalyst
             maui-workload: maui
             target: macos
+            artifact-ext: dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -215,6 +265,22 @@ jobs:
           npm ci || npm install
           npm run build
 
+      - name: Run vidra doctor
+        shell: bash
+        run: |
+          set +e
+          node src/cli/create-vidra-app/dist/cli.js doctor
+          echo "doctor exit: $?"
+
+      # The framework's own dogfood host is the only consumer of the aggregate
+      # `--scope core` codegen target, so nothing else in CI would notice if it
+      # stopped compiling.
+      - name: Build the dogfood host (${{ matrix.tfm }})
+        shell: bash
+        run: |
+          dotnet build src/host/Vidra.Host.Maui/Vidra.Host.Maui.csproj \
+            -c Debug -f ${{ matrix.tfm }}
+
       - name: Pack local NuGet feed
         shell: bash
         run: ./pack-local.sh
@@ -250,15 +316,42 @@ jobs:
           npm ci || npm install
           npm run build --if-present
 
-      # ---- Packaging smoke: run the real `vidra build` end-to-end ----
+      # ---- Signing identity (throwaway, self-signed) ----
+      - name: Create a self-signed signing identity (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash tests/ci/macos-selfsigned-identity.sh
+
+      - name: Create a self-signed signing certificate (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/ci/windows-selfsigned-cert.ps1
+
+      # ---- Runtime E2E harness ----
       #
-      # The steps above only prove the scaffolded host *builds* (Debug,
-      # unpackaged). This runs the full `vidra build` pipeline — UI build,
-      # asset copy, `dotnet publish -c Release`, codesign (macOS), and
-      # DMG/MSIX packaging — and asserts an installer actually lands in
-      # dist/. It is the only coverage for the distribution path. We invoke
-      # the built CLI directly (the `vidra` bin → dist/cli.js) so the check
-      # doesn't depend on the scaffolded app's node_modules/.bin.
+      # Swap the scaffolded app's MainPage for one that calls into JavaScript
+      # over the typed contract and writes the result to $VIDRA_E2E_PROOF. The
+      # launch steps below assert that proof, which is only produced if the
+      # packaged app loaded its bundled assets, passed the protocol-v2
+      # fingerprint handshake, and completed a full C# -> JS -> C# round-trip.
+      - name: Install the E2E proof MainPage into the scaffolded app
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          sed 's/__PROJECT_NAMESPACE__/VidraSmoke/' \
+            "$GITHUB_WORKSPACE/tests/smoke/e2e-main-page.cs.in" \
+            > src/VidraSmoke.Host/MainPage.cs
+          echo "---- MainPage.cs ----"
+          head -25 src/VidraSmoke.Host/MainPage.cs
+
+      - name: Preview the build plan (vidra build --plan)
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target ${{ matrix.target }} --plan
+
+      # ---- Packaging smoke: run the real `vidra build` end-to-end ----
       - name: Package the scaffolded app (vidra build --target ${{ matrix.target }})
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
@@ -273,12 +366,36 @@ jobs:
           echo "Contents of dist/:"
           ls -la dist/ 2>/dev/null || { echo "::error::vidra build did not create a dist/ directory"; exit 1; }
           shopt -s nullglob
-          artifacts=(dist/*.dmg dist/*.zip dist/*.msix dist/*.msixbundle)
-          if [ ${#artifacts[@]} -eq 0 ]; then
-            echo "::error::vidra build produced no installer (.dmg/.zip) for target ${{ matrix.target }}"
+          # Assert the artifact this target is supposed to produce, so a target
+          # silently emitting the wrong kind of installer fails here.
+          artifacts=(dist/*.${{ matrix.artifact-ext }})
+          if [ ${#artifacts[@]} -ne 1 ]; then
+            echo "::error::expected exactly one .${{ matrix.artifact-ext }} for target ${{ matrix.target }}, found ${#artifacts[@]}"
             exit 1
           fi
-          echo "Produced artifact(s): ${artifacts[*]}"
+          artifact="$PWD/${artifacts[0]}"
+          # The Windows leg runs these steps under git-bash but consumes
+          # $ARTIFACT from PowerShell, which cannot resolve an MSYS path.
+          if command -v cygpath >/dev/null 2>&1; then
+            artifact="$(cygpath -w "$artifact")"
+          fi
+          echo "ARTIFACT=$artifact"
+          echo "ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+      - name: Verify the macOS signature, hardened runtime and entitlements
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash tests/ci/verify-macos-artifact.sh "$ARTIFACT"
+
+      - name: Launch the packaged app and prove the bridge works (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash tests/ci/launch-macos-app.sh "$ARTIFACT"
+
+      - name: Verify the signature, launch, and prove the bridge works (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT"
 
       - name: Upload packaged installer
         if: always()

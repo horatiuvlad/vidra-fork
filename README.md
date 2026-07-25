@@ -74,6 +74,34 @@ npx vidra dev --target windows  # run a specific desktop target
 npx vidra build --target macos  # build & package a specific target
 ```
 
+Add `--plan` to any `build` to preview every step and the artifact name without
+running anything.
+
+### Shipping to other machines
+
+`vidra build` produces a macOS `.dmg` or a self-contained Windows `.zip`. Both
+run locally as-is, but an app that arrives over the internet also has to satisfy
+the OS: macOS wants a Developer ID signature plus notarization, Windows wants an
+Authenticode signature. Configure them by environment and `vidra build` does the
+rest — with nothing configured it still builds, it just warns and skips.
+
+| Variable | Purpose |
+|----------|---------|
+| `VIDRA_MACOS_CODESIGN_KEY` | Force a specific macOS signing identity (otherwise a *Developer ID Application* certificate is preferred for builds) |
+| `VIDRA_NOTARY_PROFILE` | `notarytool` keychain profile — enables notarization + stapling |
+| `VIDRA_APPLE_ID` / `VIDRA_TEAM_ID` / `VIDRA_APP_PASSWORD` | Notarization credentials, as an alternative to a stored profile |
+| `VIDRA_WINDOWS_CERT_PATH` / `VIDRA_WINDOWS_CERT_PASSWORD` | Authenticode certificate file |
+| `VIDRA_WINDOWS_CERT_THUMBPRINT` | Authenticode certificate already in the Windows store |
+| `VIDRA_WINDOWS_TIMESTAMP_URL` | Timestamp server (defaults to DigiCert) |
+
+`npm run doctor` reports which of these are in place. The macOS build signs with
+the hardened runtime using the `Entitlements.plist` in your host project — those
+entitlements are what keep .NET's JIT alive under it, so keep them.
+
+> **Windows note:** the ZIP bundles the .NET runtime and the WindowsAppSDK, but
+> the **WebView2 runtime** is a machine-wide install. It ships with Windows 11
+> and alongside Edge on Windows 10; a machine without it shows a blank window.
+
 ## How it works
 
 A single WebView hosts your web UI; the .NET MAUI host owns all native capability. Calls

@@ -38,6 +38,24 @@ We follow a pyramid:
 | Integration | `Vidra.CodeGen.AppFixture` build + `VidraCodeGenCheck`      | `ubuntu-latest`       |
 | Smoke       | `tests/dotnet/Vidra.Bridge.Smoke` + `tests/smoke/echo-ping.mjs` | `windows-latest`, `macos-latest` |
 | Smoke       | CLI scaffold + `dotnet build` of scaffolded host            | `windows-latest`, `macos-latest` |
+| Smoke       | Dogfood host (`src/host/Vidra.Host.Maui`) build             | `windows-latest`, `macos-latest` |
+| Smoke       | `vidra build` → signature, hardened runtime + entitlements  | `windows-latest`, `macos-latest` |
+| Smoke       | **Runtime E2E** — launch the packaged app, assert a C#↔JS round-trip | `windows-latest`, `macos-latest` |
+| Guard rail  | CLI rejects `--target linux`; `--plan` renders; `doctor` runs | `ubuntu-latest`       |
+
+### Signing coverage without certificates
+
+The signing and packaging path is verified in CI with **throwaway self-signed
+certificates** (`tests/ci/macos-selfsigned-identity.sh`,
+`tests/ci/windows-selfsigned-cert.ps1`). Apple's and Microsoft's trust chains
+matter for notarization and SmartScreen reputation, not for producing and
+verifying a signature — so `codesign --verify --strict`, the hardened-runtime
+flag, the embedded entitlements, and Authenticode signing are all provable
+without an Apple Developer Program membership or a purchased certificate.
+
+`spctl --assess` is *reported* rather than asserted: it is expected to reject a
+self-signed, un-notarized build, and is the check that flips green once real
+credentials exist.
 
 ### Running locally
 
@@ -222,11 +240,20 @@ Run a UI that calls each module via the SDK on each platform:
 
 ### 10. Windows packaging
 
-- [ ] MSIX build runs without errors for `net10.0-windows10.0.19041.0`.
-- [ ] Installing the unsigned MSIX on a dev machine with developer mode
-      enabled launches the app, and the webview bridge is reachable.
-- [ ] Signed MSIX installs on a clean VM without SmartScreen warnings
-      (run only before a public release).
+`vidra build --target windows` produces a **self-contained ZIP**, not an MSIX —
+the scaffolded host is an unpackaged Win32 app.
+
+- [ ] `vidra build --target windows` produces `dist/<App>-<version>-windows.zip`.
+- [ ] Unzipping on a clean Windows machine and running `<App>.Host.exe` launches
+      the app and the webview bridge is reachable — no runtime install, no
+      developer mode.
+- [ ] With `VIDRA_WINDOWS_CERT_*` configured, the shipped `.exe` is Authenticode
+      signed and timestamped (`Get-AuthenticodeSignature` reports `Valid`).
+- [ ] A signed build on a clean VM raises no SmartScreen warning (run only
+      before a public release; reputation accrues over time).
+- [ ] The target machine has the **WebView2 runtime** — it ships with Windows 11
+      and alongside Edge on Windows 10, but a machine without it renders a blank
+      window. `vidra doctor` reports this.
 
 ### 11. Regression safety net
 

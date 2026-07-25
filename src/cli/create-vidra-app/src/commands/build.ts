@@ -10,7 +10,20 @@ import {
 } from "../project.js";
 import type { BuildTarget } from "../targets/types.js";
 import { macosTarget } from "../targets/macos.js";
-import { signMacAppBundleIfPossible } from "../signing.js";
+import {
+  assessGatekeeper,
+  hasDeveloperIdIdentity,
+  signMacAppBundleIfPossible,
+  signMacDmgIfPossible,
+  verifyMacSignature,
+} from "../signing.js";
+import { notarizeAndStaple, resolveNotaryCredentials } from "../notarize.js";
+import {
+  findPrimaryExecutable,
+  resolveWindowsSigningConfig,
+  signWindowsBinariesIfPossible,
+  verifyWindowsSignature,
+} from "../windows-signing.js";
 import { windowsTarget } from "../targets/windows.js";
 import {
   ensureMauiWorkload,
@@ -106,15 +119,56 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
     process.exit(1);
   }
 
+  const io = { verbose, log: console.log, warn: console.warn };
+
   if (target.name === "macos") {
     signMacAppBundleIfPossible(bundlePath, {
-      verbose,
-      log: console.log,
-      warn: console.warn,
+      ...io,
+      purpose: "distribution",
+      entitlements: entitlementsPath(project),
     });
+    reportMacVerification(bundlePath);
+  }
+
+  // Windows binaries must be signed *before* zipping \u2014 the signature travels
+  // inside the archive, and a zip itself can't carry one.
+  let signedWindowsExe: string | null = null;
+  if (target.name === "windows") {
+    signedWindowsExe = findPrimaryExecutable(bundlePath, project.projectName);
+    if (signedWindowsExe && signWindowsBinariesIfPossible([signedWindowsExe], io)) {
+      const verified = verifyWindowsSignature(signedWindowsExe);
+      console.log(
+        row({
+          glyph: verified.ok ? "done" : "manual",
+          label: "verify sig",
+          labelWidth: LABEL_WIDTH,
+          detail: verified.ok
+            ? dim("authenticode signature verified")
+            : dim("signature did not verify \u2014 see signtool output"),
+        }),
+      );
+    }
   }
 
   const outputPath = await stepPackage(project, target, bundlePath);
+
+  if (target.name === "macos") {
+    signMacDmgIfPossible(outputPath, io);
+    const notarized = notarizeAndStaple(outputPath, io);
+    if (notarized.status === "skipped") {
+      console.log(
+        row({
+          glyph: "skip",
+          label: "notarize",
+          labelWidth: LABEL_WIDTH,
+          detail: dim(notarized.reason),
+        }),
+      );
+    } else if (notarized.status === "failed") {
+      process.exit(1);
+    }
+    reportGatekeeper(outputPath);
+  }
 
   console.log();
   console.log(
@@ -123,6 +177,66 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
     ),
   );
   console.log();
+};
+
+/**
+ * The template ships `Entitlements.plist` next to the host csproj. It enables
+ * the hardened runtime (required for notarization) while keeping .NET's JIT
+ * alive, so its absence is a meaningful signal rather than a silent default.
+ */
+const entitlementsPath = (project: ProjectInfo): string | null => {
+  const candidate = path.join(project.hostDir, "Entitlements.plist");
+  return fs.existsSync(candidate) ? candidate : null;
+};
+
+const reportMacVerification = (bundlePath: string): void => {
+  const verified = verifyMacSignature(bundlePath);
+  console.log(
+    row({
+      glyph: verified.ok ? "done" : "error",
+      label: "verify sig",
+      labelWidth: LABEL_WIDTH,
+      detail: verified.ok
+        ? dim("codesign --verify --strict passed")
+        : dim("codesign --verify --strict FAILED"),
+    }),
+  );
+  if (!verified.ok) console.error(dim(verified.output));
+};
+
+/**
+ * Gatekeeper's verdict on the finished artifact. A rejection here is expected
+ * until the build is both Developer ID signed and notarized, so it is reported
+ * as guidance rather than treated as a build failure.
+ */
+const reportGatekeeper = (artifactPath: string): void => {
+  const assessment = assessGatekeeper(artifactPath);
+  if (assessment.ok) {
+    console.log(
+      row({
+        glyph: "done",
+        label: "gatekeeper",
+        labelWidth: LABEL_WIDTH,
+        detail: dim("spctl accepted \u2014 this will open on other Macs"),
+      }),
+    );
+    return;
+  }
+
+  const missing = !hasDeveloperIdIdentity()
+    ? "needs a Developer ID Application certificate"
+    : !resolveNotaryCredentials()
+      ? "needs notarization (set VIDRA_NOTARY_PROFILE or VIDRA_APPLE_ID/VIDRA_TEAM_ID/VIDRA_APP_PASSWORD)"
+      : "see the spctl output above";
+
+  console.log(
+    row({
+      glyph: "manual",
+      label: "gatekeeper",
+      labelWidth: LABEL_WIDTH,
+      detail: dim(`spctl rejected \u2014 ${missing}`),
+    }),
+  );
 };
 
 const printBuildPlan = (project: ProjectInfo, target: BuildTarget): void => {
@@ -152,20 +266,17 @@ const printBuildPlan = (project: ProjectInfo, target: BuildTarget): void => {
   );
 
   if (target.name === "macos") {
+    const developerId = hasDeveloperIdIdentity();
     console.log(
       row({
         glyph: "done",
         label: "codesign .app",
         labelWidth: LABEL_WIDTH,
-        detail: dim("Apple Development, or ad-hoc (-)"),
-      }),
-    );
-    console.log(
-      row({
-        glyph: "plan",
-        label: "notarize",
-        labelWidth: LABEL_WIDTH,
-        detail: planBadge(),
+        detail: dim(
+          developerId
+            ? "Developer ID Application \u00b7 hardened runtime"
+            : "no Developer ID found \u2014 will fall back to development/ad-hoc",
+        ),
       }),
     );
     console.log(
@@ -176,7 +287,52 @@ const printBuildPlan = (project: ProjectInfo, target: BuildTarget): void => {
         detail: `${dim("hdiutil UDZO \u2192")} ${value(artifactName(project, target))}`,
       }),
     );
+    console.log(
+      row({
+        glyph: developerId ? "done" : "skip",
+        label: "codesign dmg",
+        labelWidth: LABEL_WIDTH,
+        detail: dim(
+          developerId ? "sign the disk image" : "skipped without a Developer ID",
+        ),
+      }),
+    );
+
+    // The notarize row stops being a promise and becomes a real step the moment
+    // credentials exist \u2014 the badge is the honest signal of which one it is.
+    const creds = resolveNotaryCredentials();
+    console.log(
+      row({
+        glyph: creds ? "active" : "plan",
+        label: "notarize",
+        labelWidth: LABEL_WIDTH,
+        detail: creds
+          ? dim("notarytool submit --wait, then staple")
+          : `${planBadge()} ${dim("no credentials configured")}`,
+      }),
+    );
+    console.log(
+      row({
+        glyph: "active",
+        label: "gatekeeper",
+        labelWidth: LABEL_WIDTH,
+        detail: dim("spctl --assess"),
+      }),
+    );
   } else {
+    const winCert = resolveWindowsSigningConfig();
+    console.log(
+      row({
+        glyph: winCert ? "done" : "skip",
+        label: "authenticode",
+        labelWidth: LABEL_WIDTH,
+        detail: dim(
+          winCert
+            ? `sign the .exe (${winCert.mode})`
+            : "no certificate configured \u2014 will ship unsigned",
+        ),
+      }),
+    );
     console.log(
       row({
         glyph: "active",

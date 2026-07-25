@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for a notarizable macOS build.
+
+  Notarization requires the hardened runtime (`codesign --options runtime`), and
+  the hardened runtime blocks the JIT that .NET relies on. These entitlements
+  hand back exactly the capabilities the runtime and the WebView need — without
+  them the app is signed and notarized and then dies on launch.
+
+  `vidra build` applies this file when signing; MAUI uses it for its own signing
+  pass via <CodesignEntitlements> in the host .csproj.
+-->
+<plist version="1.0">
+<dict>
+    <!-- .NET's JIT compiles to writable-then-executable memory. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- The runtime loads dylibs from its own bundle that aren't signed with
+         this app's team identifier. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- The WebView loads the Vite dev server over loopback in development. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- `filePicker.pickOne` / `pickMultiple` hand back paths the app then reads. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!--
+      The App Sandbox is left OFF. Vidra's `filesystem` module deliberately
+      exposes unrestricted host paths, which the sandbox would break, and
+      Developer ID distribution (unlike the Mac App Store) does not require it.
+      Turn this on — and accept the filesystem restrictions — only if you intend
+      to ship through the App Store.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+</dict>
+</plist>
