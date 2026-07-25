@@ -12,6 +12,20 @@ on:
   # cannot publish from a commit that hasn't passed this suite.
   workflow_call:
 
+# A push supersedes the run before it — no reason to keep paying for a commit
+# nobody is looking at any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Restore spends real time unpacking XML documentation nobody reads in CI,
+  # and the first-run/telemetry pings add latency to every dotnet invocation.
+  NUGET_XMLDOC_MODE: skip
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
 jobs:
   # Fast, deterministic tier: runs every unit, contract, and scaffold
   # integration test on a single Linux runner. All C# projects under
@@ -182,7 +196,11 @@ jobs:
   # here without any paid certificate.
   smoke:
     name: Smoke (${{ matrix.os }})
-    needs: unit-and-contract
+    # Deliberately not `needs: unit-and-contract`. Gating the per-OS legs behind
+    # the Linux tier added its full duration to every run's wall clock without
+    # making failures visible any sooner — the Linux job reports independently
+    # either way. Runners are free for a public repo, so the only thing the gate
+    # bought was a slower green.
     strategy:
       fail-fast: false
       matrix:
@@ -379,13 +397,11 @@ jobs:
       # macOS only for now: the script tears the session down via POSIX process
       # groups, which git-bash on the Windows runner does not provide. Windows
       # dev-loop coverage needs a PowerShell counterpart.
-      # Non-blocking for now. This is the newest and least-proven check, and it
-      # sits upstream of the signature-verification and runtime-E2E steps —
-      # letting it fail the job would stop the more valuable assertions from
-      # ever running. Flip to blocking once it has passed a few times.
+      # Blocking again: the assertion is now deterministic (the watch session
+      # builds and arms itself). It no longer requires the app to launch, which
+      # `dotnet watch run` cannot currently do on Mac Catalyst — see the script.
       - name: Smoke the dev loop (vidra dev + C# hot reload)
         if: runner.os == 'macOS'
-        continue-on-error: true
         timeout-minutes: 12
         shell: bash
         run: |
