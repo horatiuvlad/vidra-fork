@@ -7,6 +7,7 @@
 # and waits for the bridge round-trip proof written by the E2E MainPage.
 param(
     [Parameter(Mandatory = $true)][string]$Zip,
+    [Parameter(Mandatory = $true)][string]$Cli,
     [int]$TimeoutSeconds = 120
 )
 
@@ -27,7 +28,17 @@ if (-not $exe) {
 }
 Write-Host "==> found $($exe.FullName)"
 
-Write-Host "==> authenticode signature"
+# The substantive check lives in the CLI, so `vidra build` and CI share one
+# implementation. What follows is a deliberately independent re-assertion —
+# a test should not let the thing under test be its own judge.
+Write-Host "==> vidra verify (the same checks vidra build performs)"
+& node $Cli verify $exe.FullName
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "::error::vidra verify failed for $($exe.FullName)"
+    exit 1
+}
+
+Write-Host "==> independent authenticode re-check"
 $sig = Get-AuthenticodeSignature -FilePath $exe.FullName
 Write-Host "    status: $($sig.Status)"
 Write-Host "    signer: $($sig.SignerCertificate.Subject)"

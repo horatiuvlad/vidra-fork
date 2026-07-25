@@ -13,6 +13,7 @@ import { macosTarget } from "../targets/macos.js";
 import {
   assessGatekeeper,
   hasDeveloperIdIdentity,
+  inspectMacHardening,
   signMacAppBundleIfPossible,
   signMacDmgIfPossible,
   verifyMacSignature,
@@ -122,12 +123,13 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   const io = { verbose, log: console.log, warn: console.warn };
 
   if (target.name === "macos") {
+    const entitlements = entitlementsPath(project);
     signMacAppBundleIfPossible(bundlePath, {
       ...io,
       purpose: "distribution",
-      entitlements: entitlementsPath(project),
+      entitlements,
     });
-    reportMacVerification(bundlePath);
+    reportMacVerification(bundlePath, entitlements);
   }
 
   // Windows binaries must be signed *before* zipping \u2014 the signature travels
@@ -189,7 +191,10 @@ const entitlementsPath = (project: ProjectInfo): string | null => {
   return fs.existsSync(candidate) ? candidate : null;
 };
 
-const reportMacVerification = (bundlePath: string): void => {
+const reportMacVerification = (
+  bundlePath: string,
+  entitlements: string | null,
+): void => {
   const verified = verifyMacSignature(bundlePath);
   console.log(
     row({
@@ -202,6 +207,29 @@ const reportMacVerification = (bundlePath: string): void => {
     }),
   );
   if (!verified.ok) console.error(dim(verified.output));
+
+  // Read back what actually landed in the signature. Asking for the hardened
+  // runtime is not the same as getting it, and the failure mode is nasty: the
+  // app signs, notarizes, then dies the moment the .NET JIT runs. Only
+  // meaningful when we attempted a hardened signature at all.
+  if (!entitlements) return;
+
+  const hardening = inspectMacHardening(bundlePath);
+  console.log(
+    row({
+      glyph: hardening.ok ? "done" : "error",
+      label: "hardening",
+      labelWidth: LABEL_WIDTH,
+      detail: hardening.ok
+        ? dim("hardened runtime + JIT entitlements embedded")
+        : dim(
+            !hardening.hardened
+              ? "hardened runtime NOT enabled — this cannot be notarized"
+              : `missing entitlements: ${hardening.missing.join(", ")} — the app will be killed at launch`,
+          ),
+    }),
+  );
+  if (!hardening.ok) console.error(dim(hardening.output.trim()));
 };
 
 /**

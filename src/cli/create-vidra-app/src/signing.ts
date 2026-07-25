@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "fs-extra";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { dim, footer, row, STEP_LABEL_WIDTH, value } from "./theme.js";
 
 /**
@@ -208,6 +208,66 @@ export const assessGatekeeper = (
   } catch (error) {
     return { ok: false, output: formatExecError(error) };
   }
+};
+
+/**
+ * The entitlements .NET cannot run without once the hardened runtime is on.
+ * Signing with `--options runtime` and *without* these produces a bundle that
+ * signs, notarizes, and then dies the instant the JIT tries to work — so the
+ * build verifies they actually landed rather than assuming.
+ */
+export const REQUIRED_MAC_ENTITLEMENTS = [
+  "com.apple.security.cs.allow-jit",
+  "com.apple.security.cs.allow-unsigned-executable-memory",
+  "com.apple.security.cs.disable-library-validation",
+] as const;
+
+export interface MacHardeningReport {
+  /** The bundle is signed with `--options runtime`. */
+  hardened: boolean;
+  /** Entitlement keys found embedded in the signature. */
+  entitlements: string[];
+  /** Required entitlements that are absent. */
+  missing: string[];
+  /** True when the signature is hardened and nothing required is missing. */
+  ok: boolean;
+  output: string;
+}
+
+/**
+ * Reads back what was actually embedded in a signature, rather than what we
+ * asked for. `codesign -d` reports the CodeDirectory flags (which include
+ * `runtime` when the hardened runtime is enabled) and the entitlements blob.
+ */
+export const inspectMacHardening = (target: string): MacHardeningReport => {
+  const flags = runCodesignRead(["-d", "--verbose=2", target]);
+  const entitlementsXml = runCodesignRead(["-d", "--entitlements", "-", "--xml", target]) ||
+    runCodesignRead(["-d", "--entitlements", "-", target]);
+
+  const hardened = /CodeDirectory[^\n]*flags=[^\n]*runtime/.test(flags);
+  const entitlements = [...entitlementsXml.matchAll(/<key>([^<]+)<\/key>/g)].map(
+    (m) => m[1],
+  );
+  const missing = REQUIRED_MAC_ENTITLEMENTS.filter(
+    (key) => !entitlementsXml.includes(key),
+  );
+
+  return {
+    hardened,
+    entitlements,
+    missing,
+    ok: hardened && missing.length === 0,
+    output: `${flags}\n${entitlementsXml}`,
+  };
+};
+
+/**
+ * `codesign -d` writes its report to **stderr** even on success, which
+ * `execFileSync` discards — so read both streams via `spawnSync`.
+ */
+const runCodesignRead = (args: string[]): string => {
+  const result = spawnSync("codesign", args, { encoding: "utf8" });
+  return `${result.stdout ?? ""}${result.stderr ?? ""}`;
 };
 
 export const resolveMacCodeSigningIdentity = (

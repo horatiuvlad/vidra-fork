@@ -452,7 +452,9 @@ jobs:
       - name: Verify the macOS signature, hardened runtime and entitlements
         if: runner.os == 'macOS'
         shell: bash
-        run: bash tests/ci/verify-macos-artifact.sh "$ARTIFACT"
+        run: |
+          bash tests/ci/verify-macos-artifact.sh "$ARTIFACT" \
+            "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
 
       - name: Launch the packaged app and prove the bridge works (macOS)
         timeout-minutes: 10
@@ -464,7 +466,9 @@ jobs:
         timeout-minutes: 10
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT"
+        run: |
+          ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT" `
+            -Cli "$env:GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
 
       # Uploaded even on failure, since a broken installer is worth inspecting.
       # Staying lenient here is deliberate: the strict gate is the
