@@ -16,7 +16,7 @@ set -euo pipefail
 DMG="${1:?usage: verify-macos-artifact.sh <App.dmg> <cli.js>}"
 CLI="${2:?missing cli.js path}"
 
-echo "==> vidra verify (the same checks `vidra build` performs)"
+echo '==> vidra verify (the same checks `vidra build` performs)'
 node "$CLI" verify "$DMG"
 
 # --- independent oracle -------------------------------------------------------
