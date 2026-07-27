@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 const execFileSyncMock = vi.fn();
+// Expiry is read via spawnSync (security | openssl). Default to "unreadable",
+// which is the same answer a machine with no keychain gives.
+const spawnSyncMock = vi.fn(() => ({ status: 1, stdout: "", stderr: "" }));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>(
@@ -12,11 +15,14 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     execFileSync: execFileSyncMock,
+    spawnSync: spawnSyncMock,
   };
 });
 
 const {
   resolveMacCodeSigningIdentity,
+  selectMacIdentity,
+  listExpiredCodeSigningIdentities,
   signMacAppBundleIfPossible,
   signMacDmgIfPossible,
   verifyMacSignature,
@@ -248,6 +254,69 @@ describe("signMacAppBundleIfPossible", () => {
   });
 });
 
+/**
+ * The keychain is listed *unfiltered*, because `find-identity -v` hides
+ * self-signed certificates — which is what CI and anyone without a paid Apple
+ * membership signs with. That means expired certificates become visible too, so
+ * they have to be excluded by date rather than by the `-v` filter, and named
+ * when they are.
+ */
+describe("expired identities", () => {
+  const EXPIRED = "Developer ID Application: Stale Corp (YYYYYYYYYY)";
+
+  // `-v` lists only chain-validating identities; everything else is either
+  // self-signed or expired, and only the certificate's date separates them.
+  const keychain = (unfiltered: string[], chainValid: string[]) => {
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) =>
+      findIdentityOutput(args.includes("-v") ? chainValid : unfiltered),
+    );
+  };
+  const certExpiring = (when: string) => {
+    spawnSyncMock.mockImplementation(((cmd: string) =>
+      cmd === "security"
+        ? { status: 0, stdout: "-----BEGIN CERTIFICATE-----", stderr: "" }
+        : { status: 0, stdout: `notAfter=${when}\n`, stderr: "" }) as never);
+  };
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset();
+    spawnSyncMock.mockReset();
+    delete process.env.VIDRA_MACOS_CODESIGN_KEY;
+  });
+
+  it("does not report a chain-valid identity as expired", () => {
+    keychain([DEVELOPER_ID], [DEVELOPER_ID]);
+    expect(listExpiredCodeSigningIdentities()).toEqual([]);
+    // A validating chain already proves it is in date — no certificate read.
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  // A self-signed certificate never validates but is perfectly usable, so it
+  // must not be mistaken for an expired one.
+  it("keeps a self-signed identity whose certificate is still in date", () => {
+    keychain([DEVELOPER_ID], []);
+    certExpiring("Jan 1 00:00:00 2999 GMT");
+    expect(listExpiredCodeSigningIdentities()).toEqual([]);
+    expect(selectMacIdentity("distribution").identity).toBe(DEVELOPER_ID);
+  });
+
+  it("skips an expired certificate and reports which one", () => {
+    keychain([EXPIRED], []);
+    certExpiring("Jan 1 00:00:00 2001 GMT");
+
+    const selection = selectMacIdentity("distribution");
+    expect(selection.identity).toBeNull();
+    expect(selection.expiredSkipped).toEqual([EXPIRED]);
+    expect(hasDeveloperIdIdentity()).toBe(false);
+  });
+
+  it("prefers a usable certificate over an expired one of the same kind", () => {
+    keychain([EXPIRED, DEVELOPER_ID], [DEVELOPER_ID]);
+    certExpiring("Jan 1 00:00:00 2001 GMT");
+    expect(selectMacIdentity("distribution").identity).toBe(DEVELOPER_ID);
+  });
+});
+
 describe("signMacDmgIfPossible", () => {
   const originalPlatform = process.platform;
   const setPlatform = (p: NodeJS.Platform): void => {
@@ -270,9 +339,12 @@ describe("signMacDmgIfPossible", () => {
 
     signMacDmgIfPossible("/out/App.dmg", { verbose: false, log, warn });
 
+    // `--timestamp` is load-bearing: this disk image is what gets submitted to
+    // the notary service, which rejects any signature lacking a secure
+    // timestamp.
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "codesign",
-      ["--force", "--sign", DEVELOPER_ID, "/out/App.dmg"],
+      ["--force", "--timestamp", "--sign", DEVELOPER_ID, "/out/App.dmg"],
       expect.any(Object),
     );
   });

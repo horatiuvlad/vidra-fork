@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process";
 import prompts from "prompts";
 import { dim, fixLine, footer, lime, row, value } from "./theme.js";
 import type { GlyphName } from "./theme.js";
-import { listCodeSigningIdentities } from "./signing.js";
+import {
+  listCodeSigningIdentities,
+  listExpiredCodeSigningIdentities,
+} from "./signing.js";
 import { resolveNotaryCredentials } from "./notarize.js";
 import { resolveWindowsSigningConfig } from "./windows-signing.js";
 
@@ -351,12 +354,28 @@ export const isInteractive = (): boolean =>
  * user hitting a Gatekeeper wall.
  */
 export const checkMacSigningIdentity = (): Requirement => {
-  const identities = listCodeSigningIdentities();
+  const all = listCodeSigningIdentities();
+  const expired = new Set(listExpiredCodeSigningIdentities(all));
+  const identities = all.filter((id) => !expired.has(id));
+
   if (identities.some((id) => id.startsWith("Developer ID Application:"))) {
     return {
       name: "macOS signing (distribution)",
       status: "ok",
       detail: "Developer ID Application certificate found",
+    };
+  }
+  // An expired certificate is still in the keychain and still looks present, so
+  // name it — otherwise the only symptom is `codesign` failing without a reason.
+  const expiredDeveloperId = [...expired].find((id) =>
+    id.startsWith("Developer ID Application:"),
+  );
+  if (expiredDeveloperId) {
+    return {
+      name: "macOS signing (distribution)",
+      status: "unknown",
+      detail: `Developer ID certificate expired — ${expiredDeveloperId}`,
+      fix: "Renew it in the Apple Developer portal, then re-download and install it",
     };
   }
   if (identities.some((id) => id.startsWith("Apple Development:"))) {

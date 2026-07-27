@@ -43,7 +43,8 @@ export const signMacAppBundleIfPossible = (
   if (process.platform !== "darwin") return;
 
   const purpose = options.purpose ?? "development";
-  const identity = resolveMacCodeSigningIdentity(purpose);
+  const { identity, expiredSkipped } = selectMacIdentity(purpose);
+  warnAboutExpiredIdentities(expiredSkipped, options);
   const signWith = identity ?? "-";
   const label = path.basename(appBundle);
 
@@ -126,7 +127,8 @@ export const signMacDmgIfPossible = (
   if (process.platform !== "darwin") return;
 
   const purpose = options.purpose ?? "distribution";
-  const identity = resolveMacCodeSigningIdentity(purpose);
+  const { identity, expiredSkipped } = selectMacIdentity(purpose);
+  warnAboutExpiredIdentities(expiredSkipped, options);
   if (!identity) {
     // Ad-hoc signing a disk image buys nothing — Gatekeeper judges the DMG by
     // its Developer ID signature or not at all — so skip rather than pretend.
@@ -142,7 +144,12 @@ export const signMacDmgIfPossible = (
   }
 
   try {
-    execFileSync("codesign", ["--force", "--sign", identity, dmgPath], {
+    // `--timestamp` is not optional here. Apple's notary service requires a
+    // secure timestamp on every signature it is handed, and this disk image is
+    // exactly what `vidra build` submits — without it the submission comes back
+    // "The signature does not include a secure timestamp". It also keeps the
+    // signature valid past the certificate's own expiry.
+    execFileSync("codesign", ["--force", "--timestamp", "--sign", identity, dmgPath], {
       stdio: options.verbose ? "inherit" : "pipe",
     });
     options.log(
@@ -270,32 +277,69 @@ const runCodesignRead = (args: string[]): string => {
   return `${result.stdout ?? ""}${result.stderr ?? ""}`;
 };
 
-export const resolveMacCodeSigningIdentity = (
+export interface MacIdentitySelection {
+  /** The identity to sign with, or null when nothing usable was found. */
+  identity: string | null;
+  /** Identities that matched the purpose but were passed over as expired. */
+  expiredSkipped: string[];
+}
+
+/**
+ * Picks a signing identity, skipping expired certificates and reporting which
+ * ones were skipped so the caller can say so rather than failing opaquely.
+ */
+export const selectMacIdentity = (
   purpose: SigningPurpose = "development",
-): string | null => {
+): MacIdentitySelection => {
   const override = process.env.VIDRA_MACOS_CODESIGN_KEY?.trim();
-  if (override) {
-    return override;
-  }
+  if (override) return { identity: override, expiredSkipped: [] };
 
-  const identities = listCodeSigningIdentities();
-  const developerId = identities.find((id) => id.startsWith(DEVELOPER_ID_PREFIX));
-  const appleDevelopment = identities.find((id) =>
-    id.startsWith(APPLE_DEVELOPMENT_PREFIX),
-  );
+  const all = listCodeSigningIdentities();
+  const expired = new Set(listExpiredCodeSigningIdentities(all));
+  const usable = all.filter((id) => !expired.has(id));
 
-  return purpose === "distribution"
-    ? developerId ?? appleDevelopment ?? null
-    : appleDevelopment ?? developerId ?? null;
+  const pick = (list: string[]): string | null =>
+    (purpose === "distribution"
+      ? list.find((id) => id.startsWith(DEVELOPER_ID_PREFIX)) ??
+        list.find((id) => id.startsWith(APPLE_DEVELOPMENT_PREFIX))
+      : list.find((id) => id.startsWith(APPLE_DEVELOPMENT_PREFIX)) ??
+        list.find((id) => id.startsWith(DEVELOPER_ID_PREFIX))) ?? null;
+
+  return {
+    identity: pick(usable),
+    // Only worth mentioning an expired certificate if it would otherwise have
+    // been the one we chose.
+    expiredSkipped: pick([...expired]) ? [pick([...expired]) as string] : [],
+  };
 };
 
-export const listCodeSigningIdentities = (): string[] => {
+export const resolveMacCodeSigningIdentity = (
+  purpose: SigningPurpose = "development",
+): string | null => selectMacIdentity(purpose).identity;
+
+/**
+ * Every code-signing identity in the keychain, **unfiltered**.
+ *
+ * Deliberately not `find-identity -v`: that lists only identities whose chain
+ * validates, so a self-signed certificate reports `0 valid identities found`
+ * while being present and perfectly usable — `codesign` does not require chain
+ * trust to sign. Filtering here would silently hide the identity that CI and
+ * anyone testing without a paid Apple membership actually signs with. Expiry is
+ * handled separately, by date, so it stays distinguishable from "untrusted".
+ */
+export const listCodeSigningIdentities = (): string[] =>
+  runFindIdentity(["find-identity", "-p", "codesigning"]);
+
+/** The subset whose certificate chain validates — used only to narrow expiry checks. */
+export const listValidCodeSigningIdentities = (): string[] =>
+  runFindIdentity(["find-identity", "-v", "-p", "codesigning"]);
+
+const runFindIdentity = (args: string[]): string[] => {
   try {
-    const output = execFileSync(
-      "security",
-      ["find-identity", "-v", "-p", "codesigning"],
-      { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
-    );
+    const output = execFileSync("security", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    });
 
     return output
       .split(/\r?\n/)
@@ -306,9 +350,71 @@ export const listCodeSigningIdentities = (): string[] => {
   }
 };
 
-/** True when a Developer ID Application certificate is available for signing. */
-export const hasDeveloperIdIdentity = (): boolean =>
-  listCodeSigningIdentities().some((id) => id.startsWith(DEVELOPER_ID_PREFIX));
+/**
+ * Which of `identities` have already expired.
+ *
+ * Only identities that `find-identity -v` rejects are inspected: if the chain
+ * validates, the certificate is by definition still in date, so the common case
+ * (a real Apple-issued certificate) costs no extra work. For the rest we read
+ * the certificate's own `notAfter` rather than inferring — "not chain-valid"
+ * covers self-signed and expired alike, and telling a developer their
+ * certificate expired is only useful if it's true.
+ */
+export const listExpiredCodeSigningIdentities = (
+  identities: string[] = listCodeSigningIdentities(),
+): string[] => {
+  const chainValid = new Set(listValidCodeSigningIdentities());
+  return identities.filter((id) => {
+    if (chainValid.has(id)) return false;
+    const notAfter = certificateNotAfter(id);
+    return notAfter !== null && notAfter.getTime() < Date.now();
+  });
+};
+
+/** A certificate's expiry date, or null if it can't be read. */
+export const certificateNotAfter = (identity: string): Date | null => {
+  const pem = spawnSync("security", ["find-certificate", "-c", identity, "-p"], {
+    encoding: "utf8",
+  });
+  if (pem.status !== 0 || !pem.stdout) return null;
+
+  const parsed = spawnSync("openssl", ["x509", "-noout", "-enddate"], {
+    input: pem.stdout,
+    encoding: "utf8",
+  });
+  const raw = parsed.stdout?.match(/notAfter=(.+)/)?.[1]?.trim();
+  if (!raw) return null;
+
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+/** True when a usable (non-expired) Developer ID Application certificate exists. */
+export const hasDeveloperIdIdentity = (): boolean => {
+  const all = listCodeSigningIdentities();
+  const expired = new Set(listExpiredCodeSigningIdentities(all));
+  return all.some((id) => id.startsWith(DEVELOPER_ID_PREFIX) && !expired.has(id));
+};
+
+/**
+ * An expired certificate is still in the keychain and still selectable, so
+ * without this the only symptom is `codesign` failing for no stated reason.
+ */
+const warnAboutExpiredIdentities = (
+  expired: string[],
+  options: SignMacAppBundleOptions,
+): void => {
+  for (const identity of expired) {
+    options.warn(
+      row({
+        glyph: "manual",
+        label: "codesign",
+        labelWidth: STEP_LABEL_WIDTH,
+        detail: dim(`skipping expired certificate: ${identity}`),
+      }),
+    );
+  }
+};
 
 const warnAboutDistributionIdentity = (
   identity: string | null,
