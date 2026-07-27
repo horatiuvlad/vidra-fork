@@ -146,6 +146,25 @@ After signing, `vidra build` reports two checks:
   *rejected* until the build is both Developer ID signed and notarized. It is
   reported as guidance, not treated as a failure.
 
+### Re-checking a finished artifact
+
+`vidra verify` runs those same checks against an artifact that already exists —
+useful for inspecting something you downloaded, archived, or received from CI,
+without rebuilding it:
+
+```bash
+npx vidra verify                                   # newest artifact in dist/
+npx vidra verify dist/MyApp-0.1.0-macos.dmg        # a disk image
+npx vidra verify dist/MyApp-0.1.0-windows.zip      # a Windows zip
+npx vidra verify path/to/MyApp.app                 # an app bundle
+npx vidra verify path/to/MyApp.Host.exe            # a single executable
+```
+
+It mounts a `.dmg` or unpacks a `.zip` to reach the binary inside, then reports
+the signature, hardened runtime and entitlements (macOS) or the Authenticode
+signature (Windows), exiting non-zero if any of them fail. This is the same
+implementation `vidra build` runs inline, so the two can never disagree.
+
 To confirm the real end-user experience, apply the quarantine flag yourself and
 open the result:
 

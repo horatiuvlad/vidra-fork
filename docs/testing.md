@@ -82,7 +82,8 @@ VIDRA_SMOKE_CONFIG=Release node tests/smoke/echo-ping.mjs
 
 # Runtime end-to-end: launch a packaged app and prove the bridge works.
 # Run after `vidra build` on the matching OS. See tests/ci/README.md.
-bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg   # macOS
+bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg \
+  src/cli/create-vidra-app/dist/cli.js                             # macOS
 bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
 ./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip `
   -Cli src\cli\create-vidra-app\dist\cli.js                          # Windows
