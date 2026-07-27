@@ -94,6 +94,42 @@ export const findWindowsExecutableRecursive = (
   return null;
 };
 
+export interface ExtractedArchive {
+  dir: string;
+  release: () => void;
+}
+
+/**
+ * Unpacks a `.zip` to a temporary directory and returns a release function.
+ *
+ * A Windows artifact is a zip, so anything inspecting one has to open it first —
+ * there is no signature on the archive itself, only on the `.exe` inside. Node
+ * ships no unzip, so shell out to whatever the platform already has, matching
+ * how the rest of this module uses `hdiutil`.
+ */
+export const extractArchive = (zipPath: string): ExtractedArchive => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vidra-zip-"));
+  try {
+    if (process.platform === "win32") {
+      execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          `Expand-Archive -Path "${zipPath}" -DestinationPath "${dir}" -Force`,
+        ],
+        { stdio: "pipe" },
+      );
+    } else {
+      execFileSync("unzip", ["-q", "-o", zipPath, "-d", dir], { stdio: "pipe" });
+    }
+  } catch (error) {
+    fs.removeSync(dir);
+    throw error;
+  }
+  return { dir, release: () => fs.removeSync(dir) };
+};
+
 export interface MountedImage {
   mountPoint: string;
   release: () => void;

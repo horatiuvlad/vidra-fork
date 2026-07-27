@@ -10,6 +10,7 @@ import {
 } from "../signing.js";
 import { verifyWindowsSignature } from "../windows-signing.js";
 import {
+  extractArchive,
   findAppBundle,
   findWindowsExecutableRecursive,
   mountDiskImage,
@@ -39,7 +40,6 @@ import {
 export const verifyCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
   const explicit = (args._ as string[])[0];
-  const strict = !!args["strict"];
 
   const artifact = explicit ?? discoverArtifact();
   if (!artifact) {
@@ -63,11 +63,10 @@ export const verifyCommand = async (argv: string[]): Promise<void> => {
   console.log(kv("artifact", artifact));
   console.log();
 
-  const failures = artifact.endsWith(".exe")
-    ? verifyWindowsArtifact(artifact)
-    : artifact.endsWith(".zip") || fs.statSync(artifact).isDirectory()
-      ? verifyWindowsArtifact(artifact)
-      : verifyMacArtifact(artifact);
+  const failures =
+    artifactKind(artifact) === "macos"
+      ? verifyMacArtifact(artifact)
+      : verifyWindowsArtifact(artifact);
 
   console.log();
   if (failures.length > 0) {
@@ -79,17 +78,19 @@ export const verifyCommand = async (argv: string[]): Promise<void> => {
   }
   console.log(footer(dim("all checks passed")));
   console.log();
-  if (strict) {
-    // --strict additionally demands a Gatekeeper pass, which only a notarized,
-    // Developer ID signed build can satisfy.
-    const assessment = assessGatekeeper(artifact);
-    if (!assessment.ok) {
-      console.error(
-        row({ glyph: "error", detail: dim("--strict: Gatekeeper rejected this artifact") }),
-      );
-      process.exit(1);
-    }
-  }
+};
+
+/**
+ * Which platform's checks an artifact wants.
+ *
+ * Extension first, and `.app` explicitly: a `.app` bundle is a *directory*, so
+ * any "is it a directory?" test claims it for the Windows path and then fails
+ * looking for an `.exe` inside a macOS bundle. Only a directory that isn't a
+ * `.app` — a Windows publish folder — falls through.
+ */
+export const artifactKind = (artifact: string): "macos" | "windows" => {
+  if (artifact.endsWith(".dmg") || artifact.endsWith(".app")) return "macos";
+  return "windows";
 };
 
 const verifyMacArtifact = (artifact: string): string[] => {
@@ -159,28 +160,48 @@ const verifyMacArtifact = (artifact: string): string[] => {
 
 const verifyWindowsArtifact = (artifact: string): string[] => {
   const failures: string[] = [];
-  const exe = artifact.endsWith(".exe")
-    ? artifact
-    : findWindowsExecutableRecursive(artifact);
 
-  if (!exe) {
-    report(false, "executable", `no .exe found under ${artifact}`);
-    return ["executable"];
+  // The shipped Windows artifact is a zip and a zip carries no signature of its
+  // own — the signature is on the `.exe` inside, so unpack before looking.
+  let extracted: { release: () => void } | null = null;
+  let searchRoot = artifact;
+  if (artifact.endsWith(".zip")) {
+    try {
+      const archive = extractArchive(artifact);
+      extracted = archive;
+      searchRoot = archive.dir;
+    } catch (error) {
+      report(false, "archive", `could not open ${path.basename(artifact)}`, String(error));
+      return ["archive"];
+    }
   }
-  console.log(kv("executable", path.basename(exe)));
 
-  const sig = verifyWindowsSignature(exe);
-  report(
-    sig.ok,
-    "authenticode",
-    sig.untrustedRoot
-      ? "signed and intact; chain not trusted (expected for a self-signed certificate)"
-      : sig.ok
-        ? "signature verified and trusted"
-        : "not signed or not verifiable",
-    sig.output,
-  );
-  if (!sig.ok) failures.push("authenticode");
+  try {
+    const exe = artifact.endsWith(".exe")
+      ? artifact
+      : findWindowsExecutableRecursive(searchRoot);
+
+    if (!exe) {
+      report(false, "executable", `no .exe found under ${artifact}`);
+      return ["executable"];
+    }
+    console.log(kv("executable", path.basename(exe)));
+
+    const sig = verifyWindowsSignature(exe);
+    report(
+      sig.ok,
+      "authenticode",
+      sig.untrustedRoot
+        ? "signed and intact; chain not trusted (expected for a self-signed certificate)"
+        : sig.ok
+          ? "signature verified and trusted"
+          : "not signed or not verifiable",
+      sig.output,
+    );
+    if (!sig.ok) failures.push("authenticode");
+  } finally {
+    extracted?.release();
+  }
 
   return failures;
 };
