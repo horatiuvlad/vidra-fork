@@ -1,0 +1,94 @@
+name: Release npm
+
+# Publishes the two npm packages — @vidra-dev/sdk and create-vidra-app — with
+# the same shape as release-nuget.yml: manual, dry-run by default, and gated on
+# the full CI suite.
+#
+# Before this existed, both packages were published by hand with no verification
+# at all. npm, like nuget.org, does not allow re-publishing a version once it is
+# taken, so an unverified publish is not something you can undo.
+#
+# Run from the Actions tab. Leave `push` unchecked for a dry run that resolves
+# versions, builds, and reports exactly what *would* be published. Re-run with
+# `push` checked to publish for real.
+#
+# Requires repository secret: NPM_TOKEN (an npm automation token with publish
+# rights to `create-vidra-app` and the `@vidra-dev` scope).
+
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Which packages to publish"
+        type: choice
+        options: [both, sdk, cli]
+        default: both
+      push:
+        description: "Publish to npm (otherwise dry-run only)"
+        type: boolean
+        default: false
+      provenance:
+        description: "Attach npm provenance (requires publishing from the repo named in package.json)"
+        type: boolean
+        default: true
+
+jobs:
+  # Same gate as the NuGet release: a published version is permanent, so the
+  # full suite runs before anything leaves the building.
+  verify:
+    name: Verify before release
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish${{ inputs.push && '' || ' (dry run)' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm provenance, which signs a verifiable link between the
+      # published tarball and the commit + workflow that produced it.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: |
+            src/cli/create-vidra-app/package-lock.json
+            src/sdk/vidra-js/package-lock.json
+
+      - name: Publish @vidra-dev/sdk
+        if: ${{ inputs.packages == 'both' || inputs.packages == 'sdk' }}
+        working-directory: src/sdk/vidra-js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUSH: ${{ inputs.push }}
+          PROVENANCE: ${{ inputs.provenance }}
+        run: bash "$GITHUB_WORKSPACE/tests/ci/npm-publish.sh"
+
+      # The SDK goes first: a freshly scaffolded app installs the SDK version
+      # the CLI pins, so publishing the CLI first can briefly point users at an
+      # SDK version that does not exist yet.
+      - name: Publish create-vidra-app
+        if: ${{ inputs.packages == 'both' || inputs.packages == 'cli' }}
+        working-directory: src/cli/create-vidra-app
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUSH: ${{ inputs.push }}
+          PROVENANCE: ${{ inputs.provenance }}
+        run: bash "$GITHUB_WORKSPACE/tests/ci/npm-publish.sh"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### npm release"
+            echo ""
+            echo "- mode: ${{ inputs.push && 'PUBLISHED' || 'dry run' }}"
+            echo "- packages: ${{ inputs.packages }}"
+            echo "- provenance: ${{ inputs.provenance }}"
+          } >> "$GITHUB_STEP_SUMMARY"

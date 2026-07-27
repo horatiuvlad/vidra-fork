@@ -13,6 +13,7 @@ and the full bridge API surface.
 | [Architecture](./architecture.md) | The single-`WebView` host model, the JS ↔ C# bridge, transport selection, and how type-safe codegen keeps both sides in lockstep. |
 | [Capabilities](./capabilities.md) | Every built-in module and its bridge methods — `filesystem`, `dialogs`, `clipboard`, `notifications`, `app`, `appWindow`, plus MAUI Essentials — as generated, typed proxies. |
 | [Interop Protocol](./interop-protocol.md) | Protocol v2 envelopes, negotiation, transports, event contracts, and JS contracts. |
+| [Distribution](./distribution.md) | Shipping to other machines: macOS signing, the hardened runtime and entitlements, notarization, Windows Authenticode, the WebView2 dependency, and how Vidra's own packages are released. |
 | [Testing](./testing.md) | The layered test strategy (unit → contract → integration → smoke → manual), what runs in CI, and the manual release checklist. |
 | [Protocol v2 migration](./migrations/protocol-v2.md) | Breaking package compatibility, generated contract setup, and old/new API examples. |
 

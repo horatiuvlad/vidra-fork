@@ -2,6 +2,12 @@ import { execFileSync } from "node:child_process";
 import prompts from "prompts";
 import { dim, fixLine, footer, lime, row, value } from "./theme.js";
 import type { GlyphName } from "./theme.js";
+import {
+  listCodeSigningIdentities,
+  listExpiredCodeSigningIdentities,
+} from "./signing.js";
+import { resolveNotaryCredentials } from "./notarize.js";
+import { resolveWindowsSigningConfig } from "./windows-signing.js";
 
 const DOTNET = process.platform === "win32" ? "dotnet.exe" : "dotnet";
 const MAUI_DOCS =
@@ -338,6 +344,123 @@ export const isMauiWorkloadInstalled = (): boolean =>
 export const isInteractive = (): boolean =>
   Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
+// --- Distribution readiness --------------------------------------------------
+
+/**
+ * These checks are deliberately advisory — they never report `missing`, because
+ * a developer who only runs `vidra dev` has no reason to hold a certificate and
+ * `vidra doctor` must not fail for them. They exist so that the day someone
+ * tries to ship, the gap is already visible instead of being discovered by a
+ * user hitting a Gatekeeper wall.
+ */
+export const checkMacSigningIdentity = (): Requirement => {
+  const all = listCodeSigningIdentities();
+  const expired = new Set(listExpiredCodeSigningIdentities(all));
+  const identities = all.filter((id) => !expired.has(id));
+
+  if (identities.some((id) => id.startsWith("Developer ID Application:"))) {
+    return {
+      name: "macOS signing (distribution)",
+      status: "ok",
+      detail: "Developer ID Application certificate found",
+    };
+  }
+  // An expired certificate is still in the keychain and still looks present, so
+  // name it — otherwise the only symptom is `codesign` failing without a reason.
+  const expiredDeveloperId = [...expired].find((id) =>
+    id.startsWith("Developer ID Application:"),
+  );
+  if (expiredDeveloperId) {
+    return {
+      name: "macOS signing (distribution)",
+      status: "unknown",
+      detail: `Developer ID certificate expired — ${expiredDeveloperId}`,
+      fix: "Renew it in the Apple Developer portal, then re-download and install it",
+    };
+  }
+  if (identities.some((id) => id.startsWith("Apple Development:"))) {
+    return {
+      name: "macOS signing (distribution)",
+      status: "unknown",
+      detail:
+        "only a development certificate found — fine for `vidra dev`, cannot be notarized",
+      fix: "Create a Developer ID Application certificate (requires the Apple Developer Program)",
+    };
+  }
+  return {
+    name: "macOS signing (distribution)",
+    status: "unknown",
+    detail: "no code-signing identity — builds will be ad-hoc signed",
+    fix: "Create a Developer ID Application certificate, or set VIDRA_MACOS_CODESIGN_KEY",
+  };
+};
+
+export const checkNotarization = (): Requirement => {
+  const creds = resolveNotaryCredentials();
+  if (creds) {
+    return {
+      name: "macOS notarization",
+      status: "ok",
+      detail:
+        creds.mode === "profile"
+          ? `keychain profile "${creds.profile}"`
+          : `Apple ID ${creds.appleId} (team ${creds.teamId})`,
+    };
+  }
+  return {
+    name: "macOS notarization",
+    status: "unknown",
+    detail: "no credentials — `vidra build` will skip notarization",
+    fix: "xcrun notarytool store-credentials, then set VIDRA_NOTARY_PROFILE",
+  };
+};
+
+export const checkWindowsSigning = (): Requirement => {
+  const config = resolveWindowsSigningConfig();
+  if (config) {
+    return {
+      name: "Windows signing",
+      status: "ok",
+      detail:
+        config.mode === "pfx"
+          ? `certificate file ${config.pfxPath}`
+          : `store certificate ${config.thumbprint}`,
+    };
+  }
+  return {
+    name: "Windows signing",
+    status: "unknown",
+    detail: "no certificate — builds ship unsigned and SmartScreen will warn",
+    fix: "Set VIDRA_WINDOWS_CERT_PATH (+ VIDRA_WINDOWS_CERT_PASSWORD) or VIDRA_WINDOWS_CERT_THUMBPRINT",
+  };
+};
+
+/**
+ * A self-contained build bundles the .NET runtime and the WindowsAppSDK, but
+ * *not* the WebView2 Evergreen Runtime — that is a machine-wide install. It
+ * ships with Windows 11 and alongside Edge on Windows 10, so it is usually
+ * present, but a machine without it launches Vidra apps to a blank window.
+ */
+export const checkWebView2Runtime = (): Requirement => {
+  const key =
+    "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+  const result = run("reg", ["query", key, "/v", "pv"]);
+  const version = result.stdout.match(/pv\s+REG_SZ\s+([\d.]+)/)?.[1];
+  if (result.ok && version && version !== "0.0.0.0") {
+    return {
+      name: "WebView2 runtime",
+      status: "ok",
+      detail: `found ${version}`,
+    };
+  }
+  return {
+    name: "WebView2 runtime",
+    status: "unknown",
+    detail: "not detected — Vidra apps need it to render on this machine",
+    fix: "https://developer.microsoft.com/microsoft-edge/webview2/",
+  };
+};
+
 // --- Reporting ---------------------------------------------------------------
 
 export const collectRequirements = (
@@ -353,6 +476,12 @@ export const collectRequirements = (
   ];
   if (opts.includeXcode ?? process.platform === "darwin") {
     reqs.push(checkXcode());
+  }
+  if (process.platform === "darwin") {
+    reqs.push(checkMacSigningIdentity(), checkNotarization());
+  }
+  if (process.platform === "win32") {
+    reqs.push(checkWindowsSigning(), checkWebView2Runtime());
   }
   return reqs;
 };

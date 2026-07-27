@@ -21,8 +21,16 @@ on:
         default: false
 
 jobs:
+  # Publishing is irreversible — nuget.org does not allow re-uploading a version
+  # — so the full CI suite runs first and packing only starts if it is green.
+  # Without this gate a red commit could be published straight to nuget.org.
+  verify:
+    name: Verify before release
+    uses: ./.github/workflows/ci.yml
+
   pack:
     name: Pack (${{ matrix.os }})
+    needs: verify
     strategy:
       fail-fast: false
       matrix:

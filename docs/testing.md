@@ -38,6 +38,25 @@ We follow a pyramid:
 | Integration | `Vidra.CodeGen.AppFixture` build + `VidraCodeGenCheck`      | `ubuntu-latest`       |
 | Smoke       | `tests/dotnet/Vidra.Bridge.Smoke` + `tests/smoke/echo-ping.mjs` | `windows-latest`, `macos-latest` |
 | Smoke       | CLI scaffold + `dotnet build` of scaffolded host            | `windows-latest`, `macos-latest` |
+| Smoke       | Dogfood host (`src/host/Vidra.Host.Maui`) build             | `windows-latest`, `macos-latest` |
+| Smoke       | `vidra build` → signature, hardened runtime + entitlements  | `windows-latest`, `macos-latest` |
+| Smoke       | **Runtime E2E** — launch the packaged app, assert a C#↔JS round-trip | `windows-latest`, `macos-latest` |
+| Smoke       | **Dev loop** — `vidra dev` starts, Vite serves, the host builds under `dotnet watch` | `macos-latest` |
+| Guard rail  | CLI rejects `--target linux`; `--plan` renders; `doctor` runs | `ubuntu-latest`       |
+
+### Signing coverage without certificates
+
+The signing and packaging path is verified in CI with **throwaway self-signed
+certificates** (`tests/ci/macos-selfsigned-identity.sh`,
+`tests/ci/windows-selfsigned-cert.ps1`). Apple's and Microsoft's trust chains
+matter for notarization and SmartScreen reputation, not for producing and
+verifying a signature — so `codesign --verify --strict`, the hardened-runtime
+flag, the embedded entitlements, and Authenticode signing are all provable
+without an Apple Developer Program membership or a purchased certificate.
+
+`spctl --assess` is *reported* rather than asserted: it is expected to reject a
+self-signed, un-notarized build, and is the check that flips green once real
+credentials exist.
 
 ### Running locally
 
@@ -60,6 +79,17 @@ cd src/cli/create-vidra-app && npm install && npm test
 # Bridge echo-ping smoke (any OS)
 dotnet build tests/dotnet/Vidra.Bridge.Smoke/Vidra.Bridge.Smoke.csproj -c Release
 VIDRA_SMOKE_CONFIG=Release node tests/smoke/echo-ping.mjs
+
+# Runtime end-to-end: launch a packaged app and prove the bridge works.
+# Run after `vidra build` on the matching OS. See tests/ci/README.md.
+bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg \
+  src/cli/create-vidra-app/dist/cli.js                             # macOS
+bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
+./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip `
+  -Cli src\cli\create-vidra-app\dist\cli.js                          # Windows
+
+# Dev loop: `vidra dev` + C# hot reload (macOS)
+bash tests/ci/dev-loop-smoke.sh <app-dir> <path/to/cli.js> macos
 ```
 
 ### Updating code-gen snapshots
@@ -103,14 +133,16 @@ Run them on a development machine for each platform you ship to
 - [ ] Entered app-id flows into `Info.plist` (macOS) / `Package.appxmanifest` (Windows).
 - [ ] `cd demo && npm run dev` brings up Vite + the native host, and the
       webview loads `http://localhost:5173` (or the configured port).
-- [ ] Editing a C# method body (e.g. `OnTickAsync` in `MainPage.cs`) hot
-      reloads into the running app and the UI flashes "C# reloaded"; a rude
-      edit (e.g. adding a field) rebuilds and relaunches automatically.
+- [ ] **Windows only today:** editing a C# method body (e.g. `OnTickAsync` in
+      `MainPage.cs`) hot reloads into the running app and the UI flashes
+      "C# reloaded"; a rude edit (e.g. adding a field) rebuilds and relaunches
+      automatically. On macOS the app does not launch under `dotnet watch` at
+      all — use `--no-hot-reload` there and see the tracking issue.
 - [ ] Closing the native window: with C# hot reload active the session stays
       up and prints "save a C# file to relaunch" (save to relaunch, ctrl-c to
       stop); with `--no-hot-reload` it terminates the dev process cleanly.
 - [ ] `vidra build` produces a distributable artifact
-      (`.app` / `.dmg` on macOS, `.msix`/`.exe` on Windows).
+      (`.app` / `.dmg` on macOS, a self-contained `.zip` on Windows).
 
 ### 2. Windowing module
 
@@ -222,11 +254,20 @@ Run a UI that calls each module via the SDK on each platform:
 
 ### 10. Windows packaging
 
-- [ ] MSIX build runs without errors for `net10.0-windows10.0.19041.0`.
-- [ ] Installing the unsigned MSIX on a dev machine with developer mode
-      enabled launches the app, and the webview bridge is reachable.
-- [ ] Signed MSIX installs on a clean VM without SmartScreen warnings
-      (run only before a public release).
+`vidra build --target windows` produces a **self-contained ZIP**, not an MSIX —
+the scaffolded host is an unpackaged Win32 app.
+
+- [ ] `vidra build --target windows` produces `dist/<App>-<version>-windows.zip`.
+- [ ] Unzipping on a clean Windows machine and running `<App>.Host.exe` launches
+      the app and the webview bridge is reachable — no runtime install, no
+      developer mode.
+- [ ] With `VIDRA_WINDOWS_CERT_*` configured, the shipped `.exe` is Authenticode
+      signed and timestamped (`Get-AuthenticodeSignature` reports `Valid`).
+- [ ] A signed build on a clean VM raises no SmartScreen warning (run only
+      before a public release; reputation accrues over time).
+- [ ] The target machine has the **WebView2 runtime** — it ships with Windows 11
+      and alongside Edge on Windows 10, but a machine without it renders a blank
+      window. `vidra doctor` reports this.
 
 ### 11. Regression safety net
 
