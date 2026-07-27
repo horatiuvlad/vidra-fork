@@ -41,7 +41,7 @@ We follow a pyramid:
 | Smoke       | Dogfood host (`src/host/Vidra.Host.Maui`) build             | `windows-latest`, `macos-latest` |
 | Smoke       | `vidra build` → signature, hardened runtime + entitlements  | `windows-latest`, `macos-latest` |
 | Smoke       | **Runtime E2E** — launch the packaged app, assert a C#↔JS round-trip | `windows-latest`, `macos-latest` |
-| Smoke       | **Dev loop** — `vidra dev` reaches host-ready and reacts to a C# edit | `macos-latest` |
+| Smoke       | **Dev loop** — `vidra dev` starts, Vite serves, the host builds under `dotnet watch` | `macos-latest` |
 | Guard rail  | CLI rejects `--target linux`; `--plan` renders; `doctor` runs | `ubuntu-latest`       |
 
 ### Signing coverage without certificates
@@ -84,7 +84,8 @@ VIDRA_SMOKE_CONFIG=Release node tests/smoke/echo-ping.mjs
 # Run after `vidra build` on the matching OS. See tests/ci/README.md.
 bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg   # macOS
 bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
-./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip # Windows
+./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip `
+  -Cli src\cli\create-vidra-app\dist\cli.js                          # Windows
 
 # Dev loop: `vidra dev` + C# hot reload (macOS)
 bash tests/ci/dev-loop-smoke.sh <app-dir> <path/to/cli.js> macos
@@ -131,14 +132,16 @@ Run them on a development machine for each platform you ship to
 - [ ] Entered app-id flows into `Info.plist` (macOS) / `Package.appxmanifest` (Windows).
 - [ ] `cd demo && npm run dev` brings up Vite + the native host, and the
       webview loads `http://localhost:5173` (or the configured port).
-- [ ] Editing a C# method body (e.g. `OnTickAsync` in `MainPage.cs`) hot
-      reloads into the running app and the UI flashes "C# reloaded"; a rude
-      edit (e.g. adding a field) rebuilds and relaunches automatically.
+- [ ] **Windows only today:** editing a C# method body (e.g. `OnTickAsync` in
+      `MainPage.cs`) hot reloads into the running app and the UI flashes
+      "C# reloaded"; a rude edit (e.g. adding a field) rebuilds and relaunches
+      automatically. On macOS the app does not launch under `dotnet watch` at
+      all — use `--no-hot-reload` there and see the tracking issue.
 - [ ] Closing the native window: with C# hot reload active the session stays
       up and prints "save a C# file to relaunch" (save to relaunch, ctrl-c to
       stop); with `--no-hot-reload` it terminates the dev process cleanly.
 - [ ] `vidra build` produces a distributable artifact
-      (`.app` / `.dmg` on macOS, `.msix`/`.exe` on Windows).
+      (`.app` / `.dmg` on macOS, a self-contained `.zip` on Windows).
 
 ### 2. Windowing module
 

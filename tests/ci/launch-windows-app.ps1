@@ -1,10 +1,12 @@
 # Verify the packaged Windows build: signature, then a real launch.
 #
-# Usage: launch-windows-app.ps1 -Zip <path\to\App.zip> [-TimeoutSeconds 120]
+# Usage: launch-windows-app.ps1 -Zip <path\to\App.zip> -Cli <path\to\cli.js> [-TimeoutSeconds 120]
 #
-# Asserts the shipped .exe carries an Authenticode signature (self-signed is
-# fine — see windows-selfsigned-cert.ps1), then runs it with VIDRA_E2E_PROOF set
-# and waits for the bridge round-trip proof written by the E2E MainPage.
+# Runs `vidra verify` against the shipped .exe — the same checks `vidra build`
+# performs — plus one independent Authenticode re-assertion, then launches the
+# app with VIDRA_E2E_PROOF set and waits for the bridge round-trip proof written
+# by the E2E MainPage. A self-signed certificate is expected: see
+# windows-selfsigned-cert.ps1.
 param(
     [Parameter(Mandatory = $true)][string]$Zip,
     [Parameter(Mandatory = $true)][string]$Cli,
