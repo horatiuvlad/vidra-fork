@@ -43,28 +43,53 @@
     <ProjectReference Include="..\Vidra.Host.Maui.Core\Vidra.Host.Maui.Core.csproj" />
   </ItemGroup>
 
-  <!-- Auto-generate TS proxies for all modules after the host builds -->
+  <!--
+    Build-order only: the codegen below runs the tool without building it, so the
+    tool has to already exist. Without this reference the host builds only if
+    something else happened to build the tool first — true after a solution
+    build, false in a clean checkout, where the codegen step died with MSB3073.
+
+    The metadata keeps the tool's own build honest. The host targets a platform
+    TFM and, on Windows and Mac Catalyst, a runtime identifier; letting either
+    flow down to a net10.0 console tool would fail its build or land its output
+    in a RID subdirectory that `dotnet run` (no-build) does not look in.
+    Private/ExcludeAssets keep the tool and its package dependencies out of the
+    app itself — this reference exists purely to order the two builds.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\..\tools\Vidra.CodeGen\Vidra.CodeGen.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true"
+                      UndefineProperties="TargetFramework;RuntimeIdentifier;SelfContained"
+                      Private="false"
+                      ExcludeAssets="all" />
+  </ItemGroup>
+
+  <!--
+    Auto-generate TS proxies for all modules after the host builds. This host is
+    the only consumer of the aggregate core-scope codegen, but it goes
+    through the same shipped targets every consumer project imports, so tool
+    resolution has one implementation rather than one per caller.
+  -->
   <PropertyGroup>
     <VidraCodeGenProject>$(MSBuildThisFileDirectory)..\..\tools\Vidra.CodeGen\Vidra.CodeGen.csproj</VidraCodeGenProject>
     <VidraTsOutputDir>$(MSBuildThisFileDirectory)..\..\sdk\vidra-js\src\generated</VidraTsOutputDir>
+    <VidraSdkImport>../singleton.js</VidraSdkImport>
+    <VidraContractScope>core</VidraContractScope>
     <VidraModulesDir>$(MSBuildThisFileDirectory)..\..\modules</VidraModulesDir>
   </PropertyGroup>
 
-  <Target Name="VidraCodeGen" AfterTargets="Build" Condition="'$(TargetFramework)' != ''">
-    <ItemGroup>
-      <VidraModuleAssembly Include="$(VidraModulesDir)\Vidra.Modules.FileSystem\bin\$(Configuration)\net10.0\Vidra.Modules.FileSystem.dll" />
-      <VidraModuleAssembly Include="$(VidraModulesDir)\Vidra.Modules.Clipboard\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Clipboard.dll" />
-      <VidraModuleAssembly Include="$(VidraModulesDir)\Vidra.Modules.Dialogs\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Dialogs.dll" />
-      <VidraModuleAssembly Include="$(VidraModulesDir)\Vidra.Modules.Notifications\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Notifications.dll" />
-      <VidraModuleAssembly Include="$(VidraModulesDir)\Vidra.Modules.AppLifecycle\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.AppLifecycle.dll" />
-      <VidraModuleAssembly Include="$(VidraModulesDir)\Vidra.Modules.Windowing\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Windowing.dll" />
-      <VidraModuleAssembly Include="$(VidraModulesDir)\Vidra.Modules.Essentials\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Essentials.dll" />
-      <VidraModuleAssembly Include="$(MSBuildThisFileDirectory)..\Vidra.Host.Maui.Core\bin\$(Configuration)\$(TargetFramework)\Vidra.Host.Maui.Core.dll" />
-    </ItemGroup>
+  <ItemGroup>
+    <VidraCodeGenAssembly Include="$(VidraModulesDir)\Vidra.Modules.FileSystem\bin\$(Configuration)\net10.0\Vidra.Modules.FileSystem.dll" />
+    <VidraCodeGenAssembly Include="$(VidraModulesDir)\Vidra.Modules.Clipboard\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Clipboard.dll" />
+    <VidraCodeGenAssembly Include="$(VidraModulesDir)\Vidra.Modules.Dialogs\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Dialogs.dll" />
+    <VidraCodeGenAssembly Include="$(VidraModulesDir)\Vidra.Modules.Notifications\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Notifications.dll" />
+    <VidraCodeGenAssembly Include="$(VidraModulesDir)\Vidra.Modules.AppLifecycle\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.AppLifecycle.dll" />
+    <VidraCodeGenAssembly Include="$(VidraModulesDir)\Vidra.Modules.Windowing\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Windowing.dll" />
+    <VidraCodeGenAssembly Include="$(VidraModulesDir)\Vidra.Modules.Essentials\bin\$(Configuration)\$(TargetFramework)\Vidra.Modules.Essentials.dll" />
+    <VidraCodeGenAssembly Include="$(MSBuildThisFileDirectory)..\Vidra.Host.Maui.Core\bin\$(Configuration)\$(TargetFramework)\Vidra.Host.Maui.Core.dll" />
+  </ItemGroup>
 
-    <Message Importance="high" Text="[Vidra] Generating TypeScript proxies..." />
-    <Exec Command="dotnet run --configuration $(Configuration) --no-build --project &quot;$(VidraCodeGenProject)&quot; -- generate --assembly @(VidraModuleAssembly->'&quot;%(Identity)&quot;', ' ') --output &quot;$(VidraTsOutputDir)&quot; --sdk-import &quot;../singleton.js&quot; --scope core"
-          WorkingDirectory="$(MSBuildProjectDirectory)" />
-  </Target>
+  <Import Project="$(MSBuildThisFileDirectory)..\..\bridge\Vidra.Bridge\Vidra.CodeGen.targets" />
 
 </Project>

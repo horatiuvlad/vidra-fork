@@ -1,0 +1,52 @@
+<Project>
+
+  <!--
+    Aggregate codegen — several assemblies scanned into one barrel in core
+    scope — has exactly one real consumer, src/host/Vidra.Host.Maui, and that
+    host only builds on macOS and Windows. This fixture drives the same path
+    through the shipped targets on the Linux tier, so a break in the
+    multi-assembly command surfaces in the cheap job instead of only in the two
+    platform ones.
+
+    Its inputs are two assemblies the Linux job has already built, both
+    carrying contracts: the app fixture next door (a JS contract) and the
+    FileSystem module tests, which link the module's own source and so expose
+    its native contract without needing the MAUI workload.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <VidraTsOutputDir>$(MSBuildThisFileDirectory)generated-aggregate</VidraTsOutputDir>
+    <VidraContractScope>core</VidraContractScope>
+    <VidraSdkImport>../singleton.js</VidraSdkImport>
+    <VidraCodeGenProject>$(MSBuildThisFileDirectory)../../../src/tools/Vidra.CodeGen/Vidra.CodeGen.csproj</VidraCodeGenProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <VidraCodeGenAssembly Include="$(MSBuildThisFileDirectory)../Vidra.Modules.FileSystem.Tests/bin/$(Configuration)/net10.0/Vidra.Modules.FileSystem.Tests.dll" />
+    <VidraCodeGenAssembly Include="$(MSBuildThisFileDirectory)bin/$(Configuration)/net10.0/Vidra.CodeGen.AppFixture.dll" />
+  </ItemGroup>
+
+  <Import Project="../../../src/bridge/Vidra.Bridge/Vidra.CodeGen.targets" />
+
+  <Target Name="_VerifyAggregateInputs">
+    <Error Condition="!Exists('%(VidraCodeGenAssembly.Identity)')"
+           Text="Fixture input missing: %(VidraCodeGenAssembly.Identity). Build the $(Configuration) test projects first." />
+  </Target>
+
+  <Target Name="VerifyAggregateCodeGen" DependsOnTargets="_VerifyAggregateInputs;VidraCodeGen">
+
+    <!-- One proxy per scanned assembly proves every assembly argument arrived. -->
+    <Error Condition="!Exists('$(VidraTsOutputDir)/filesystem.ts')"
+           Text="Aggregate codegen dropped the FileSystem module's contract." />
+    <Error Condition="!Exists('$(VidraTsOutputDir)/counter.ts')"
+           Text="Aggregate codegen dropped the app fixture's contract." />
+    <Error Condition="!Exists('$(VidraTsOutputDir)/index.ts')"
+           Text="Aggregate codegen emitted no barrel." />
+
+    <RemoveDir Directories="$(VidraTsOutputDir)" />
+
+  </Target>
+
+</Project>

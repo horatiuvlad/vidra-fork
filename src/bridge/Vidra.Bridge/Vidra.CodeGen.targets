@@ -11,6 +11,14 @@
       VidraSdkImport        - The import path for @vidra-dev/sdk (default: @vidra-dev/sdk)
       VidraCodeGenProject   - Path to the Vidra.CodeGen.csproj (auto-detected in monorepo)
       VidraGenerateTs       - Set to "false" to disable codegen (default: true)
+      VidraContractScope    - "app" (default) or "core"
+
+    Configurable items (set before the Import):
+      VidraCodeGenAssembly  - Assemblies to scan. Defaults to this project's own
+                              output. A project that aggregates contracts from
+                              several assemblies — the framework's own dogfood
+                              host is the only one today — lists them here
+                              instead of hand-rolling its own Exec.
   -->
 
   <PropertyGroup>
@@ -27,13 +35,39 @@
     <CompilerVisibleProperty Include="VidraContractScope" />
   </ItemGroup>
 
+  <!--
+    Both entry points below scan the same assemblies with the same arguments and
+    differ only in the check flag, so the argument line is built once here. TargetPath
+    is only known once the build is running, which is why the default lands in a
+    target rather than a top-level ItemGroup.
+  -->
+  <Target Name="_VidraCodeGenArguments">
+    <ItemGroup>
+      <VidraCodeGenAssembly Condition="'@(VidraCodeGenAssembly)' == ''" Include="$(TargetPath)" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_VidraCodeGenArgs>generate --assembly @(VidraCodeGenAssembly->'&quot;%(Identity)&quot;', ' ') --output &quot;$(VidraTsOutputDir)&quot; --sdk-import &quot;$(VidraSdkImport)&quot; --scope &quot;$(VidraContractScope)&quot;</_VidraCodeGenArgs>
+    </PropertyGroup>
+  </Target>
+
+  <!--
+    Runs when there is something to scan: an explicit assembly list, or this
+    project's own output once it exists. A project whose Build produced no
+    assembly (see MissingAggregateTarget.proj) is skipped rather than failed.
+
+    The condition deliberately reads the item before _VidraCodeGenArguments
+    fills in the default — MSBuild evaluates a target's Condition first and
+    skips its DependsOnTargets entirely when that condition is false, so a
+    condition can never read what its own dependency computes.
+  -->
   <Target Name="VidraCodeGen"
           AfterTargets="Build"
-          Condition="'$(VidraGenerateTs)' == 'true' AND '$(TargetFramework)' != '' AND '$(VidraTsOutputDir)' != '' AND Exists('$(TargetPath)')">
+          DependsOnTargets="_VidraCodeGenArguments"
+          Condition="'$(VidraGenerateTs)' == 'true' AND '$(TargetFramework)' != '' AND '$(VidraTsOutputDir)' != '' AND ('@(VidraCodeGenAssembly)' != '' OR Exists('$(TargetPath)'))">
 
-    <Message Importance="high" Text="[Vidra] Generating TypeScript proxies from $(TargetPath)..." />
+    <Message Importance="high" Text="[Vidra] Generating TypeScript proxies from @(VidraCodeGenAssembly->'%(Filename)', ', ')..." />
 
-    <Exec Command="$(VidraCodeGenCommand) generate --assembly &quot;$(TargetPath)&quot; --output &quot;$(VidraTsOutputDir)&quot; --sdk-import &quot;$(VidraSdkImport)&quot; --scope &quot;$(VidraContractScope)&quot;"
+    <Exec Command="$(VidraCodeGenCommand) $(_VidraCodeGenArgs)"
           WorkingDirectory="$(MSBuildProjectDirectory)"
           IgnoreExitCode="false" />
 
@@ -42,8 +76,9 @@
   </Target>
 
   <Target Name="VidraCodeGenCheck"
-          Condition="'$(VidraGenerateTs)' == 'true' AND '$(TargetFramework)' != '' AND '$(VidraTsOutputDir)' != '' AND Exists('$(TargetPath)')">
-    <Exec Command="$(VidraCodeGenCommand) generate --assembly &quot;$(TargetPath)&quot; --output &quot;$(VidraTsOutputDir)&quot; --sdk-import &quot;$(VidraSdkImport)&quot; --scope &quot;$(VidraContractScope)&quot; --check"
+          DependsOnTargets="_VidraCodeGenArguments"
+          Condition="'$(VidraGenerateTs)' == 'true' AND '$(TargetFramework)' != '' AND '$(VidraTsOutputDir)' != '' AND ('@(VidraCodeGenAssembly)' != '' OR Exists('$(TargetPath)'))">
+    <Exec Command="$(VidraCodeGenCommand) $(_VidraCodeGenArgs) --check"
           WorkingDirectory="$(MSBuildProjectDirectory)"
           IgnoreExitCode="false" />
   </Target>

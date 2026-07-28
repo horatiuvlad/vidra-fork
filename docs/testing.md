@@ -36,9 +36,11 @@ We follow a pyramid:
 | Contract    | Same fixtures via SDK `contract.test.ts`                    | `ubuntu-latest`       |
 | Integration | CLI `scaffold.integration.test.ts` (tmpdir scaffold)        | `ubuntu-latest`       |
 | Integration | `Vidra.CodeGen.AppFixture` build + `VidraCodeGenCheck`      | `ubuntu-latest`       |
+| Integration | `AggregateScope.proj` — multi-assembly, core-scope codegen  | `ubuntu-latest`       |
 | Smoke       | `tests/dotnet/Vidra.Bridge.Smoke` + `tests/smoke/echo-ping.mjs` | `windows-latest`, `macos-latest` |
 | Smoke       | CLI scaffold + `dotnet build` of scaffolded host            | `windows-latest`, `macos-latest` |
 | Smoke       | Dogfood host (`src/host/Vidra.Host.Maui`) build             | `windows-latest`, `macos-latest` |
+| Smoke       | Dogfood host build leaves the committed built-in contracts unchanged | `macos-latest` |
 | Smoke       | `vidra build` → signature, hardened runtime + entitlements  | `windows-latest`, `macos-latest` |
 | Smoke       | **Runtime E2E** — launch the packaged app, assert a C#↔JS round-trip | `windows-latest`, `macos-latest` |
 | Smoke       | **Dev loop** — `vidra dev` starts, Vite serves, the host builds under `dotnet watch` | `macos-latest` |
@@ -66,6 +68,7 @@ dotnet test tests/dotnet/Vidra.Bridge.Tests/Vidra.Bridge.Tests.csproj
 dotnet test tests/dotnet/Vidra.CodeGen.Tests/Vidra.CodeGen.Tests.csproj
 dotnet build tests/dotnet/Vidra.CodeGen.AppFixture/Vidra.CodeGen.AppFixture.csproj
 dotnet msbuild tests/dotnet/Vidra.CodeGen.AppFixture/Vidra.CodeGen.AppFixture.csproj -t:VidraCodeGenCheck
+dotnet msbuild tests/dotnet/Vidra.CodeGen.AppFixture/AggregateScope.proj -t:VerifyAggregateCodeGen
 dotnet test tests/dotnet/Vidra.Modules.FileSystem.Tests/Vidra.Modules.FileSystem.Tests.csproj
 dotnet test tests/dotnet/Vidra.Modules.Windowing.Tests/Vidra.Modules.Windowing.Tests.csproj
 dotnet test tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj
