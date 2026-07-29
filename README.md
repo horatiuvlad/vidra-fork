@@ -48,7 +48,10 @@ npm run dev
 ```
 
 `npm run dev` (which runs `vidra dev`) starts Vite and the native host for your current
-OS together, with Vite HMR and supported C# hot reload.
+OS together, with Vite HMR and a C# loop: supported edits hot reload into the running app.
+On macOS the Mac Catalyst hot-reload agent sometimes drops out mid-session
+([dotnet/sdk#55488](https://github.com/dotnet/sdk/issues/55488)); when it does, `vidra dev`
+says so and keeps the loop working by rebuilding and relaunching on save.
 
 ### Prerequisites
 
@@ -66,7 +69,7 @@ The `vidra` CLI is a local dev dependency of each scaffolded app — there's no 
 `vidra` to install. Run it from inside your project via the npm scripts or `npx`:
 
 ```bash
-npm run dev                     # start Vite + native host (hot reload)
+npm run dev                     # start Vite + native host (UI + C# reload on save)
 npm run build                   # build + package for distribution
 npm run doctor                  # verify your environment
 npx vidra run                   # launch the native host only

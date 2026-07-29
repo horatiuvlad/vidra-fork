@@ -31,17 +31,24 @@ npm run dev
 ```
 
 This starts the Vite dev server and launches the native host for the current OS
-under `dotnet watch`. Both sides of the app hot reload:
+under `dotnet watch`. Both sides of the app pick up your edits:
 
 - **UI**: edit anything in `ui/src` — Vite HMR updates the WebView instantly.
-- **C#**: edit the host (for example `OnTickAsync` in `MainPage.cs`) — supported
-  edits apply to the running app in seconds, and the UI flashes a
-  "C# reloaded" badge. Edits hot reload can't express (new fields, changed
-  signatures, …) trigger an automatic rebuild and relaunch.
+- **C#**: edit the host (for example `OnTickAsync` in `MainPage.cs`) and save —
+  the session puts the change in front of you in seconds. *How* depends on the
+  platform:
+  - **Windows**: supported edits apply to the *running* app and the UI flashes a
+    "C# reloaded" badge. Edits hot reload can't express (new fields, changed
+    signatures, …) trigger an automatic rebuild and relaunch.
+  - **macOS**: the same, when the toolchain cooperates. Mac Catalyst's
+    hot-reload agent often drops its connection mid-session (dotnet/sdk#55488);
+    a dropped agent applies nothing while `dotnet watch` still reports success,
+    so `vidra dev` watches for it and switches the session to rebuild +
+    relaunch on save. You'll see it say so — after that, edits arrive with a
+    restart and no badge.
+    `npm run doctor` says which loop you get.
 
-C# hot reload needs a recent toolchain (on macOS, the .NET 10.0.203+ workload
-set — run `npm run doctor` to check). When unavailable, `vidra dev` falls back
-to a one-shot build and launch. To skip `dotnet watch` explicitly:
+To skip `dotnet watch` entirely and do a single build and launch:
 
 ```bash
 npx vidra dev --no-hot-reload

@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import prompts from "prompts";
 import { dim, fixLine, footer, lime, row, value } from "./theme.js";
 import type { GlyphName } from "./theme.js";
@@ -106,74 +108,6 @@ export const workloadSetVersion = (
 ): string | undefined =>
   workloadListOutput.match(WORKLOAD_SET_VERSION_LINE)?.[1];
 
-/**
- * Minimum workload set whose Mac Catalyst SDK supports `dotnet run` /
- * `dotnet watch` (shipped with the macios "Xcode 26.4" release in workload
- * set 10.0.203). Older sets make `vidra dev` fall back to a classic launch.
- */
-const MIN_MACCATALYST_WATCH_WORKLOAD_SET = [10, 0, 203];
-
-const MIN_MACCATALYST_WATCH_SDK = [10, 0, 300];
-
-/**
- * Compares the leading dotted segments of `version` against `minimum`. Missing
- * segments read as 0, and a non-numeric leading segment (e.g. "unknown") fails
- * closed. Segments beyond `minimum`'s length are ignored, so "10.0.203.1"
- * satisfies a 10.0.203 minimum.
- */
-const meetsMinimumVersion = (
-  version: string,
-  minimum: readonly number[],
-): boolean => {
-  const segments = version.split(".").map((s) => Number.parseInt(s, 10));
-  if (segments.slice(0, minimum.length).some(Number.isNaN)) return false;
-
-  for (let i = 0; i < minimum.length; i++) {
-    const segment = segments[i] ?? 0;
-    if (segment !== minimum[i]) return segment > minimum[i];
-  }
-  return true;
-};
-
-/** True when the workload set is new enough for C# hot reload on Mac Catalyst. */
-export const workloadSetSupportsCSharpHotReload = (version: string): boolean =>
-  meetsMinimumVersion(version, MIN_MACCATALYST_WATCH_WORKLOAD_SET);
-
-/** True when the .NET SDK's `dotnet watch` can hot reload Mac Catalyst apps. */
-export const sdkSupportsCSharpHotReload = (version: string): boolean =>
-  meetsMinimumVersion(version, MIN_MACCATALYST_WATCH_SDK);
-
-export interface HotReloadBlocker {
-  /** Which requirement failed, with a ready-to-print explanation. */
-  reason: string;
-  fix: string;
-}
-
-/**
- * Environment probe for the dev command: is C# hot reload usable for Mac
-
- */
-export const macCatalystHotReloadBlocker = (): HotReloadBlocker | null => {
-  const sdkRes = run(DOTNET, ["--version"]);
-  if (!sdkRes.found) return null;
-  const sdkVersion = sdkRes.stdout.trim();
-  if (sdkVersion && !sdkSupportsCSharpHotReload(sdkVersion)) {
-    return {
-      reason: `C# hot reload needs the .NET SDK 10.0.300+ \u2014 found ${sdkVersion}`,
-      fix: INSTALL_NET_10_FIX,
-    };
-  }
-
-  const res = run(DOTNET, ["workload", "list"]);
-  if (!res.found) return null;
-  const version = workloadSetVersion(res.stdout);
-  if (!version || workloadSetSupportsCSharpHotReload(version)) return null;
-  return {
-    reason: `C# hot reload needs workload set 10.0.203+ \u2014 found ${version}`,
-    fix: "dotnet workload update",
-  };
-};
-
 // --- Build-output signatures -------------------------------------------------
 //
 // A plain `dotnet build` (run by `vidra dev` and the scaffolder) can fail for
@@ -273,44 +207,137 @@ const checkMauiWorkload = (workloadList: RunResult | null): Requirement => {
 };
 
 /**
- * Advisory: can this environment run the host under `dotnet watch`? On
- * Windows any .NET 10 SDK can; Mac Catalyst needs a recent enough workload
- * set. Never reported as `missing` — `vidra dev` degrades gracefully to a
- * classic launch, so an old workload set shouldn't fail the doctor.
+ * Advisory: how do C# edits reach the running app on this OS? Never reported
+ * as `missing` \u2014 `vidra dev` has a working loop on both platforms, and the
+ * difference between them is a property of the platform, not of the machine,
+ * so there is nothing here for a user to go and fix.
+ *
+ * On Windows `dotnet watch` applies deltas to the running process. On macOS
+ * it cannot today: the Mac Catalyst hot-reload agent's connection drops before
+ * any edit arrives (and older workloads never loaded the agent at all), so
+ * `vidra dev` rebuilds and relaunches the app on save instead. Say so plainly
+ * rather than advertising a loop the toolchain does not deliver.
  */
-const checkCSharpHotReload = (workloadList: RunResult | null): Requirement => {
-  const name = "C# hot reload";
+// --- Mac Catalyst SDK pack ---------------------------------------------------
+//
+// The Catalyst pack decides whether `dotnet watch run` can launch the app at
+// all. Packs before 26.2.10233 compute the run path from `$(AssemblyName).app`
+// while the build names the bundle `$(_AppBundleName).app` (i.e. from
+// `ApplicationTitle`), so for any app whose title differs from its assembly
+// name — every scaffolded Vidra app — the launch fails with "No such file or
+// directory" and the watch session parks forever. Fixed upstream in
+// dotnet/macios#26318; verified by reading the shipped targets of each pack:
+// broken in 26.0.11017, 26.1.10502 and 26.2.10191, fixed in 26.2.10233,
+// 26.4.10259 and 26.5.10301.
+//
+// `dotnet workload list` cannot answer this: with `--skip-manifest-update` the
+// workload set version advances while the Catalyst manifest stays behind, so
+// the pack on disk is the only honest source.
+const FIRST_FIXED_MACCATALYST_PACK = [26, 2, 10233];
+
+const MACCATALYST_PACK_DIR = /^Microsoft\.MacCatalyst\.Sdk\.net\d+\.\d+_\d+\.\d+$/;
+
+const compareVersions = (a: readonly number[], b: readonly number[]): number => {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+};
+
+const versionSegments = (version: string): number[] | null => {
+  const segments = version.split(".").map((s) => Number.parseInt(s, 10));
+  return segments.length && !segments.some(Number.isNaN) ? segments : null;
+};
+
+/** The newest of a list of pack version directory names, or undefined. */
+export const newestPackVersion = (versions: string[]): string | undefined => {
+  let best: { raw: string; segments: number[] } | undefined;
+  for (const raw of versions) {
+    const segments = versionSegments(raw);
+    if (!segments) continue;
+    if (!best || compareVersions(segments, best.segments) > 0) {
+      best = { raw, segments };
+    }
+  }
+  return best?.raw;
+};
+
+/**
+ * True when this Catalyst pack still computes the run path from the assembly
+ * name, i.e. `dotnet watch run` cannot launch a scaffolded app. Unparseable
+ * versions read as fine: the check is advisory and a false alarm is worse than
+ * a missed one.
+ */
+export const macCatalystPackIsStale = (version: string): boolean => {
+  const segments = versionSegments(version);
+  return segments
+    ? compareVersions(segments, FIRST_FIXED_MACCATALYST_PACK) < 0
+    : false;
+};
+
+/** Where the SDK keeps its packs, derived from `dotnet --list-sdks`. */
+const dotnetPacksDir = (): string | undefined => {
+  if (process.env.DOTNET_ROOT) {
+    return path.join(process.env.DOTNET_ROOT, "packs");
+  }
+  const res = run(DOTNET, ["--list-sdks"]);
+  if (!res.found) return undefined;
+  // "10.0.302 [/usr/local/share/dotnet/sdk]" — the sdk dir's parent is the root.
+  const sdkDir = res.stdout.trim().split("\n").pop()?.match(/\[(.+)\]\s*$/)?.[1];
+  return sdkDir ? path.join(path.dirname(sdkDir), "packs") : undefined;
+};
+
+/** Newest Mac Catalyst SDK pack installed, or undefined if none/unreadable. */
+export const installedMacCatalystPackVersion = (): string | undefined => {
+  const packs = dotnetPacksDir();
+  if (!packs) return undefined;
+  try {
+    const versions = fs
+      .readdirSync(packs, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && MACCATALYST_PACK_DIR.test(e.name))
+      .flatMap((e) => {
+        try {
+          return fs
+            .readdirSync(path.join(packs, e.name), { withFileTypes: true })
+            .filter((v) => v.isDirectory())
+            .map((v) => v.name);
+        } catch {
+          return [];
+        }
+      });
+    return newestPackVersion(versions);
+  } catch {
+    return undefined;
+  }
+};
+
+const checkCSharpDevLoop = (workloadList: RunResult | null): Requirement => {
+  const name = "C# dev loop";
   if (!workloadList) {
     return { name, status: "unknown", detail: "requires the .NET SDK first" };
   }
   if (process.platform !== "darwin") {
-    return { name, status: "ok", detail: "dotnet watch supported" };
+    return {
+      name,
+      status: "ok",
+      detail: "dotnet watch applies C# edits to the running app",
+    };
   }
-  const sdkVersion = run(DOTNET, ["--version"]).stdout.trim();
-  if (sdkVersion && !sdkSupportsCSharpHotReload(sdkVersion)) {
+  const pack = installedMacCatalystPackVersion();
+  if (pack && macCatalystPackIsStale(pack)) {
     return {
       name,
       status: "unknown",
-      detail: `SDK ${sdkVersion} \u2014 its dotnet-watch crashes Mac Catalyst apps on launch (needs 10.0.300+) \u2014 vidra dev falls back to a classic launch`,
-      fix: INSTALL_NET_10_FIX,
+      detail: `Mac Catalyst pack ${pack} cannot launch the app under dotnet watch \u2014 vidra dev falls back to a classic launch (fixed in 26.2.10233+)`,
+      fix: "dotnet workload update",
     };
   }
-  const version = workloadSetVersion(workloadList.stdout);
-  if (!version) {
-    return {
-      name,
-      status: "unknown",
-      detail: "could not read the workload set version",
-    };
-  }
-  if (workloadSetSupportsCSharpHotReload(version)) {
-    return { name, status: "ok", detail: `workload set ${version}` };
-  }
+  const packNote = pack ? ` (Mac Catalyst pack ${pack})` : "";
   return {
     name,
-    status: "unknown",
-    detail: `workload set ${version} predates Mac Catalyst dotnet-watch support (needs 10.0.203+) — vidra dev falls back to a classic launch`,
-    fix: "dotnet workload update",
+    status: "ok",
+    detail: `dotnet watch applies C# edits to the running app${packNote} \u2014 vidra dev rebuilds and relaunches if the agent drops mid-session`,
   };
 };
 
@@ -472,7 +499,7 @@ export const collectRequirements = (
   const reqs: Requirement[] = [
     dotnet,
     checkMauiWorkload(workloadList),
-    checkCSharpHotReload(workloadList),
+    checkCSharpDevLoop(workloadList),
   ];
   if (opts.includeXcode ?? process.platform === "darwin") {
     reqs.push(checkXcode());

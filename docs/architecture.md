@@ -34,7 +34,11 @@ The bridge is bidirectional — see the message round-trip in
 
 ## Host Model
 
-- **Development**: the WebView loads `http://localhost:5173` (or a configurable `VIDRA_DEV_URL`), allowing Vite HMR and standard browser dev tools. `vidra dev` launches the host under `dotnet watch`, so supported C# edits hot reload into the running process (rude edits rebuild + relaunch automatically); after each applied delta the host pushes a `vidra.hotReloaded` bridge event so the UI can react. On toolchains without `dotnet watch` support for the target, the CLI falls back to a one-shot build + direct launch (`vidra dev --no-hot-reload` forces this).
+- **Development**: the WebView loads `http://localhost:5173` (or a configurable `VIDRA_DEV_URL`), allowing Vite HMR and standard browser dev tools. `vidra dev` runs the host under `dotnet watch`, and what a C# edit does depends on what the platform allows:
+  - **Windows** — `dotnet watch run`: supported edits hot reload into the running process (rude edits rebuild + relaunch automatically), and after each applied delta the host pushes a `vidra.hotReloaded` bridge event so the UI can react.
+  - **macOS (Mac Catalyst)** — `dotnet watch run` as well, but the agent connection is unreliable: measured across eight sessions on `macos-latest`, it survived to the first edit in two of them and dropped while the session sat idle in the other six ([dotnet/sdk#55488](https://github.com/dotnet/sdk/issues/55488)). A dropped agent is silent — every update fails while `dotnet watch` still prints "changes applied" — so `vidra dev` watches for the SDK's own "Further changes won't be applied to this process" warning and, on seeing it, restarts the watcher as `dotnet watch build` and drives the launch itself. From that point the session is a rebuild-and-relaunch loop and no `vidra.hotReloaded` event fires. (An older, unrelated failure — `dotnet watch run` never launching the app because the Catalyst run target exec'd `$(AssemblyName).app` while the bundle is built as `$(_AppBundleName).app` — was a stale SDK pack, [dotnet/macios#26318](https://github.com/dotnet/macios/issues/26318), fixed in 26.2.10233+; `vidra doctor` flags a toolchain still on the broken packs.)
+
+  If `dotnet watch` cannot start at all, the CLI falls back to a one-shot build + direct launch (`vidra dev --no-hot-reload` forces this).
 - **Production**: the WebView loads bundled static assets from the app package (`Resources/Raw/wwwroot/index.html`).
 
 The same bridge works in both modes. For JS→C# traffic it prefers a first-class

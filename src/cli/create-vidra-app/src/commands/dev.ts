@@ -16,7 +16,6 @@ import {
   looksLikeMissingWorkload,
   looksLikeMissingXcode,
   looksLikeXcodeTooOld,
-  macCatalystHotReloadBlocker,
   printWorkloadHint,
   printXcodeHint,
   printXcodeTooOldHint,
@@ -43,6 +42,11 @@ const DOTNET_COMMAND = process.platform === "win32" ? "dotnet.exe" : "dotnet";
 // How much recent `dotnet watch` output to keep for diagnosing an early exit
 // (workload / Xcode hints) when deciding to fall back to a classic launch.
 const WATCH_OUTPUT_TAIL_CHARS = 8192;
+
+// How long a relaunch waits for the previous app to go away before killing it
+// outright. Two instances of the same bundle must never overlap, and a host
+// wedged on shutdown must not wedge the dev loop with it.
+const HOST_TERMINATION_TIMEOUT_MS = 5_000;
 
 const TARGETS = {
   macos: {
@@ -78,7 +82,7 @@ const startSession = async (
   const args = parseArgs(["_", "_", ...argv]);
   const targetName = (args["target"] as string) || detectPlatform();
   const verbose = !!args["verbose"];
-  let hotReload = opts.hotReloadDefault && !args["no-hot-reload"];
+  const hotReload = opts.hotReloadDefault && !args["no-hot-reload"];
   let viteUrl = process.env.VIDRA_DEV_URL || "http://localhost:5173";
   const target = TARGETS[targetName as DevTargetName];
 
@@ -103,25 +107,6 @@ const startSession = async (
     process.exit(1);
   }
 
-  // Some toolchains can't hot reload Mac Catalyst apps and fail in ways the
-  // session can't detect (silent no-op deltas on old workload sets, an app
-  // that crashes on launch under the 10.0.2xx watcher). Probe up-front and
-  // use the classic launch instead of lying about hot reload being active.
-  if (hotReload && target.name === "macos") {
-    const blocker = macCatalystHotReloadBlocker();
-    if (blocker) {
-      hotReload = false;
-      console.log();
-      console.log(
-        row({
-          glyph: "manual",
-          detail: `${dim(blocker.reason + "; using a classic launch")}`,
-        }),
-      );
-      console.log(fixLine(blocker.fix));
-    }
-  }
-
   if (opts.vite) {
     viteUrl = await selectDevServerUrl(viteUrl);
   }
@@ -135,18 +120,80 @@ const startSession = async (
 
 // --- dotnet watch helpers (exported for unit tests) ---------------------------
 
+/**
+ * How the C#-side dev loop is driven:
+ *
+ * - `"delta"` — `dotnet watch run`. The watcher owns the launch, because only
+ *   then can it inject the hot reload agent (`DOTNET_STARTUP_HOOKS`) and apply
+ *   edits to the *running* process. This is the real thing, and every session
+ *   starts here.
+ * - `"rebuild"` — `dotnet watch build` plus a launch of our own, reusing the
+ *   build-then-spawn path behind `vidra run` and `vidra dev --no-hot-reload`.
+ *   Not a platform choice: it is where a session *lands* when the delta channel
+ *   dies under it (see {@link DELTA_CHANNEL_DEAD_WARNING}).
+ *
+ * Mac Catalyst needs the fallback because its delta channel is unreliable
+ * rather than absent. Measured on `macos-latest`, workload set 10.0.302
+ * (Catalyst pack 26.5.10301), four `dotnet watch run` sessions, two SDKs, with
+ * and without a wiped `bin`/`obj`:
+ *
+ * | SDK      | build state       | agent socket after 30s idle | first edit  |
+ * |----------|-------------------|-----------------------------|-------------|
+ * | 10.0.301 | fresh scaffold    | connected                   | delta lands |
+ * | 10.0.301 | wiped + rebuilt   | dropped                     | nothing     |
+ * | 10.0.302 | fresh scaffold    | dropped                     | nothing     |
+ * | 10.0.302 | wiped + rebuilt   | connected                   | delta lands |
+ *
+ * So deltas do work on Catalyst today — about half the time. The failure is the
+ * agent's WebSocket dropping while the session sits idle, before any edit
+ * (dotnet/sdk#55488); it tracks neither the SDK nor the freshness of the build
+ * output. When it happens every update fails and `dotnet watch` still prints
+ * "changes applied", so a session that silently applies nothing is exactly as
+ * quiet as a working one — which is what makes detecting it worth the code.
+ *
+ * (The other half of this on Catalyst, `dotnet watch run` never launching the
+ * app at all, was a stale-manifest bug — dotnet/macios#26318, fixed from
+ * Catalyst pack 26.2 onwards. `vidra doctor` reports a toolchain still on the
+ * broken packs rather than this code working around it.)
+ */
+export type WatchStrategy = "delta" | "rebuild";
+
+/**
+ * The initial strategy. Always `"delta"`: a session only moves to `"rebuild"`
+ * by observing its own delta channel die, never by predicting that it will.
+ */
+export const watchStrategyFor = (_targetName: DevTargetName): WatchStrategy =>
+  "delta";
+
+/**
+ * `dotnet watch` gives up on a process with this line, after an update batch
+ * fails. It is a `LogWarning` in the SDK, so unlike the transport's own
+ * diagnostics it prints at default verbosity — the session never has to run the
+ * watcher in `--verbose` to see it. Matching English text is safe because
+ * {@link dotnetWatchEnv} pins `DOTNET_CLI_UI_LANGUAGE=en`.
+ */
+export const DELTA_CHANNEL_DEAD_WARNING =
+  "further changes won't be applied to this process";
+
 export interface DotnetWatchArgsOptions {
   csprojPath: string;
   framework: string;
   buildConfig: string;
   verbose: boolean;
-  targetName: DevTargetName;
+  strategy: WatchStrategy;
 }
 
 /**
- * Arguments for launching the host under `dotnet watch`, which builds, runs,
- * and hot reloads the app itself (it must own the launch so it can inject the
- * hot reload agent via DOTNET_STARTUP_HOOKS).
+ * Arguments for the `dotnet watch` process. Under `"delta"` the watcher runs
+ * the app; under `"rebuild"` it only builds it (see {@link WatchStrategy}).
+ *
+ * `RunWithOpen=false` is load-bearing on Mac Catalyst. Left at its default the
+ * run target hands the bundle to `open(1)`, which returns immediately and
+ * leaves the app parented to launchd: `dotnet run` exits 0 straight away, the
+ * watcher concludes the app is gone, and nothing the app prints — including the
+ * readiness sentinel this session waits for — is ever connected to anything.
+ * With it, the bundle's executable is spawned as a child, which is what makes
+ * both the sentinel and the hot reload agent's lifetime observable.
  */
 export const buildDotnetWatchArgs = (
   opts: DotnetWatchArgsOptions,
@@ -158,15 +205,14 @@ export const buildDotnetWatchArgs = (
   // paired with DOTNET_WATCH_RESTART_ON_RUDE_EDIT for older SDKs.
   "--non-interactive",
   ...(opts.verbose ? ["--verbose"] : []),
-  "run",
+  opts.strategy === "rebuild" ? "build" : "run",
   "-f",
   opts.framework,
   "-c",
   opts.buildConfig,
-  // Launch the Mac Catalyst app by exec'ing the binary rather than `open -a`,
-  // so the environment (VIDRA_DEV_URL, DOTNET_STARTUP_HOOKS) propagates and
-  // stdout streams back. Ignored by targets that don't define the property.
-  ...(opts.targetName === "macos" ? ["--property:RunWithOpen=false"] : []),
+  ...(opts.strategy === "delta" && opts.framework.includes("maccatalyst")
+    ? ["--property:RunWithOpen=false"]
+    : []),
 ];
 
 /** Extra environment for the `dotnet watch` process (inherited by the app). */
@@ -175,6 +221,11 @@ export const dotnetWatchEnv = (devUrl: string): Record<string, string> => ({
   DOTNET_WATCH_RESTART_ON_RUDE_EDIT: "1",
   DOTNET_WATCH_SUPPRESS_EMOJIS: "1",
   DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER: "1",
+  // The session reads the loop's state out of watch and MSBuild output
+  // ("Build succeeded.", "Waiting for a file to change"), so the child must
+  // speak the language those patterns are written in. Without this a localized
+  // SDK silently breaks the dev loop for everyone whose machine isn't English.
+  DOTNET_CLI_UI_LANGUAGE: "en",
 });
 
 export const buildViteArgs = (devUrl: string): string[] => [
@@ -186,7 +237,14 @@ export const buildViteArgs = (devUrl: string): string[] => [
   "--strictPort",
 ];
 
-export type WatchLineEvent = "appStarted" | "appWaiting" | "buildBlocked" | null;
+export type WatchLineEvent =
+  | "appStarted"
+  | "appWaiting"
+  | "buildBlocked"
+  | "buildSucceeded"
+  | "buildFailed"
+  | "deltaChannelDead"
+  | null;
 
 /**
  * Classifies a `dotnet watch` output line into lifecycle events we act on:
@@ -209,17 +267,108 @@ export type WatchLineEvent = "appStarted" | "appWaiting" | "buildBlocked" | null
  *   fixed. Before the first launch this can mean an environment problem
  *   (wrong Xcode, missing workload) rather than a code error, so the session
  *   prints targeted hints.
+ * - `deltaChannelDead` — the hot reload agent is gone and `dotnet watch` has
+ *   stopped trying to reach it, so every later edit would be swallowed while
+ *   the watcher keeps printing "changes applied". The session reacts by
+ *   switching to the rebuild loop (see {@link WatchStrategy}).
+ * - `buildSucceeded` / `buildFailed` — MSBuild's own end-of-build summary.
+ *   These are the outcome of one watch cycle, and under the `"rebuild"`
+ *   strategy they are what drives the loop: a succeeded build is the cue to
+ *   (re)launch the app ourselves. MSBuild is the right thing to read here
+ *   rather than the watcher, because it reports the outcome as well as the
+ *   boundary, and it prints the classic summary whenever stdout is a pipe —
+ *   which it always is for us.
  */
 export const HOST_READY_SENTINEL = "[vidra] host ready";
 
 export const classifyWatchLine = (line: string): WatchLineEvent => {
+  if (line.toLowerCase().includes(DELTA_CHANNEL_DEAD_WARNING)) {
+    return "deltaChannelDead";
+  }
   if (/waiting for a file to change/i.test(line)) return "appWaiting";
   if (/fix the error to continue/i.test(line)) return "buildBlocked";
   if (line.includes(HOST_READY_SENTINEL)) return "appStarted";
+  // "Build succeeded." / "Build FAILED." — anchored to the start of the line
+  // (modulo MSBuild's indentation) so a compiler message or app log that
+  // merely contains the words can't be mistaken for the summary.
+  if (/^\s*build succeeded\b/i.test(line)) return "buildSucceeded";
+  if (/^\s*build failed\b/i.test(line)) return "buildFailed";
   if (/\bwatch\b/i.test(line) && /\b(?:started|launched)\b/i.test(line)) {
     return "appStarted";
   }
   return null;
+};
+
+/** What the session should do about a classified line. */
+export type WatchReaction =
+  | "markHostReady"
+  | "launchHost"
+  | "switchToRebuild"
+  | "reportBuildFailed"
+  | "reportAppIdle"
+  | "reportEarlyExit"
+  | "none";
+
+export interface WatchReactionContext {
+  strategy: WatchStrategy;
+  /** Has the app run at least once this session? */
+  hostLaunched: boolean;
+  /** MSBuild's verdict for the cycle now ending, if it was seen. */
+  buildOutcome: "succeeded" | "failed" | null;
+  /** Has any build at all finished this session? */
+  everBuilt: boolean;
+}
+
+/**
+ * The dev loop's state machine, kept pure so it can be tested without a
+ * toolchain. The two strategies read the same lines but mean different things
+ * by them:
+ *
+ * - Under `"rebuild"` the watcher never launches anything, so a successful
+ *   build *is* the launch signal and the idle line is just the cycle closing.
+ * - Under `"delta"` the watcher owns the app, so an idle line means the app is
+ *   gone — either it exited (fine, save to relaunch) or it never started, which
+ *   is the interesting case: a failed build, or a launch that died before the
+ *   host could announce itself.
+ */
+export const watchReaction = (
+  event: WatchLineEvent,
+  ctx: WatchReactionContext,
+): WatchReaction => {
+  if (event === "appStarted") {
+    return ctx.hostLaunched ? "none" : "markHostReady";
+  }
+
+  // Only meaningful while the watcher owns the app: under "rebuild" nothing is
+  // asking it to apply deltas, so a stale warning from the session it replaced
+  // must not send us round the loop again.
+  if (event === "deltaChannelDead") {
+    return ctx.strategy === "delta" ? "switchToRebuild" : "none";
+  }
+
+  if (ctx.strategy === "rebuild") {
+    if (event === "buildSucceeded") return "launchHost";
+    if (event === "buildFailed") return "reportBuildFailed";
+    if (event === "appWaiting" || event === "buildBlocked") {
+      // The outcome was already reported when MSBuild printed it; the idle line
+      // only closes the cycle. A cycle that ends having never built anything is
+      // the one worth saying something about — the watcher parked without
+      // getting as far as a build. `everBuilt` rather than `buildOutcome`
+      // because watch writes the idle line to stderr and MSBuild writes its
+      // summary to stdout: within a cycle their arrival order is not
+      // guaranteed, and a session that has built before is plainly not stuck.
+      return ctx.everBuilt || ctx.buildOutcome !== null
+        ? "none"
+        : "reportEarlyExit";
+    }
+    return "none";
+  }
+
+  if (event === "appWaiting" || event === "buildBlocked") {
+    if (ctx.hostLaunched) return "reportAppIdle";
+    return ctx.buildOutcome === "failed" ? "reportBuildFailed" : "reportEarlyExit";
+  }
+  return "none";
 };
 
 interface SessionOptions {
@@ -232,6 +381,9 @@ class DevSession {
   private readonly buildConfig = process.env.VIDRA_BUILD_CONFIG || "Debug";
   private readonly vite: boolean;
   private readonly hotReload: boolean;
+  // Not readonly: a session that watches its delta channel die moves itself to
+  // the rebuild loop (see WatchStrategy).
+  private strategy: WatchStrategy;
   private shuttingDown = false;
 
   // Watch-mode state: `watchChild` is the `dotnet watch` process (a process
@@ -240,6 +392,16 @@ class DevSession {
   private watchChild: ChildProcess | undefined;
   private watchReady = false;
   private watchOutputTail = "";
+  private buildOutcome: "succeeded" | "failed" | null = null;
+  private everBuilt = false;
+
+  // `"rebuild"` state: the app process we own, and a guard so that overlapping
+  // build cycles (save twice in a row) can't spawn two hosts at once.
+  private hostChild: ChildProcess | undefined;
+  private relaunching = false;
+  private relaunchPending = false;
+  private fellBackToClassic = false;
+
 
   private endSession: () => void = () => {};
   private readonly sessionDone = new Promise<void>((resolve) => {
@@ -255,6 +417,31 @@ class DevSession {
   ) {
     this.vite = options.vite;
     this.hotReload = options.hotReload;
+    this.strategy = watchStrategyFor(target.name);
+  }
+
+  /** How C# edits reach the app, in words the user can trust. */
+  private get csharpLoopLabel(): string {
+    return this.strategy === "rebuild"
+      ? "C# rebuild + relaunch"
+      : "C# hot reload active";
+  }
+
+  /**
+   * The banner word for the loop as a whole. UI edits always hot reload; the
+   * banner only stops saying so when the C# half of the loop cannot.
+   */
+  private get loopHeadline(): string {
+    return this.hotReload && this.strategy === "rebuild"
+      ? "reload on save active"
+      : "hot reload active";
+  }
+
+  /** The same, phrased for the footer's "watching …" line. */
+  private get csharpLoopSuffix(): string {
+    return this.strategy === "rebuild"
+      ? "C# rebuild + relaunch on save"
+      : "hot reload on save";
   }
 
   async run(): Promise<void> {
@@ -299,8 +486,8 @@ class DevSession {
           "active",
           null,
           this.hotReload
-            ? `${lime("hot reload active")} ${dim(`\u2014 edit ui/src or ${hostDirLabel} and save`)}`
-            : `${lime("hot reload active")} ${dim("\u2014 edit ui/src and save")}`,
+            ? `${lime(this.loopHeadline)} ${dim(`\u2014 edit ui/src or ${hostDirLabel} and save`)}`
+            : `${lime(this.loopHeadline)} ${dim("\u2014 edit ui/src and save")}`,
         ),
       );
       console.log();
@@ -308,7 +495,7 @@ class DevSession {
         footer(
           this.hotReload
             ? `${dim("watching")} ${value("ui/")} ${dim("\u00b7")} ${value(`${hostDirLabel}/`)} ${dim(
-                "\u00b7 hot reload on save \u00b7 ctrl-c to stop",
+                `\u00b7 ${this.csharpLoopSuffix} \u00b7 ctrl-c to stop`,
               )}`
             : `${dim("watching")} ${value("ui/")} ${dim(
                 "\u00b7 hot reload on save \u00b7 ctrl-c to stop",
@@ -380,7 +567,7 @@ class DevSession {
         framework: this.target.framework,
         buildConfig: this.buildConfig,
         verbose: this.verbose,
-        targetName: this.target.name,
+        strategy: this.strategy,
       }),
       {
         cwd: this.project.root,
@@ -406,6 +593,11 @@ class DevSession {
 
     watch.on("exit", (code, signal) => {
       if (this.shuttingDown) return;
+      // A watcher we retired on purpose (see switchToRebuildLoop, which clears
+      // watchChild before killing it). Identity rather than a "switching" flag:
+      // the old process can outlive the wait for it, and a flag cleared by then
+      // would read its exit as the watcher dying under us.
+      if (this.watchChild !== watch) return;
 
       if (this.watchReady) {
         // The app ran at least once; treat like a normal host exit.
@@ -451,75 +643,232 @@ class DevSession {
     );
 
     const event = classifyWatchLine(line);
-    if (event === "appStarted" && !this.watchReady) {
-      this.watchReady = true;
-      console.log(
-        taggedRow(
-          "done",
-          "host",
-          `${dim("launched")} ${value(this.project.projectName)} ${dim("\u2014 C# hot reload active")}`,
-        ),
-      );
-      return;
+    if (event === "buildSucceeded" || event === "buildFailed") {
+      this.buildOutcome = event === "buildSucceeded" ? "succeeded" : "failed";
+      this.everBuilt = true;
     }
 
-    // Both remaining events mean dotnet watch has gone idle without a running
-    // app; it stays alive and retries on the next save. Which message the
-    // watcher prints varies by SDK: after a failed build, .NET 10.0.2xx says
-    // "Waiting for a file to change" (same as after an app exit) while
-    // 10.0.3xx says "Fix the error to continue" — so both must take the
-    // environment-hint path below, keyed on whether the app ever launched.
-    if ((event !== "appWaiting" && event !== "buildBlocked") || this.shuttingDown) {
-      return;
+    if (this.shuttingDown) return;
+
+    const reaction = watchReaction(event, {
+      strategy: this.strategy,
+      hostLaunched: this.watchReady,
+      buildOutcome: this.buildOutcome,
+      everBuilt: this.everBuilt,
+    });
+
+    // An idle line closes the cycle: whatever MSBuild said applied to the build
+    // that just ended, not to the next one. Which message the watcher prints
+    // varies by SDK — .NET 10.0.2xx says "Waiting for a file to change" while
+    // 10.0.3xx says "Fix the error to continue" — so both count.
+    if (event === "appWaiting" || event === "buildBlocked") {
+      this.buildOutcome = null;
     }
 
-    if (this.watchReady) {
-      console.log(
-        taggedRow(
-          "manual",
-          "host",
-          dim("app not running \u2014 save a C# file to relaunch, or ctrl-c to stop"),
-        ),
-      );
-      return;
-    }
+    switch (reaction) {
+      case "markHostReady":
+        this.announceHostLaunched(line.includes(HOST_READY_SENTINEL));
+        return;
 
-    // Idle before readiness was ever confirmed. Usually the initial build
-    // failed — often an environment problem with a well-known fix, so surface
-    // the targeted hint. But the app may also have launched and exited before
-    // printing the readiness sentinel (e.g. an immediate crash), which is not
-    // a build failure; don't claim one unless the output shows it.
-    if (!/Build FAILED/i.test(this.watchOutputTail)) {
-      console.log(
-        taggedRow(
-          "manual",
-          "host",
-          dim(
-            "app exited before it was ready \u2014 save a C# file to relaunch, or ctrl-c to stop",
+      case "launchHost":
+        // Under "rebuild" the watcher has just produced a fresh build and will
+        // not run it — that part is ours to do (see WatchStrategy).
+        void this.launchOrRelaunchHost();
+        return;
+
+      case "switchToRebuild":
+        void this.switchToRebuildLoop();
+        return;
+
+      case "reportAppIdle":
+        console.log(
+          taggedRow(
+            "manual",
+            "host",
+            dim("app not running — save a C# file to relaunch, or ctrl-c to stop"),
           ),
-        ),
-      );
-      return;
+        );
+        return;
+
+      case "reportEarlyExit":
+        // Idle before the app was ever ready, with no build failure to blame:
+        // it launched and died before announcing itself (an immediate crash),
+        // or the watcher gave up before it ever built.
+        console.log(
+          taggedRow(
+            "manual",
+            "host",
+            dim(
+              "app exited before it was ready — save a C# file to relaunch, or ctrl-c to stop",
+            ),
+          ),
+        );
+        return;
+
+      case "reportBuildFailed":
+        // A failure before the first launch is often an environment problem
+        // with a well-known fix rather than a code error, so surface the
+        // targeted hint alongside the generic message.
+        if (!this.watchReady) {
+          if (looksLikeMissingWorkload(this.watchOutputTail)) printWorkloadHint();
+          else if (looksLikeXcodeTooOld(this.watchOutputTail)) printXcodeTooOldHint();
+          else if (looksLikeMissingXcode(this.watchOutputTail)) printXcodeHint();
+        }
+        console.log(
+          taggedRow(
+            "manual",
+            "host",
+            dim("build failed — fix the error and save to retry, or ctrl-c to stop"),
+          ),
+        );
+        return;
+
+      case "none":
+        return;
     }
+  }
 
-    if (looksLikeMissingWorkload(this.watchOutputTail)) printWorkloadHint();
-    else if (looksLikeXcodeTooOld(this.watchOutputTail)) printXcodeTooOldHint();
-    else if (looksLikeMissingXcode(this.watchOutputTail)) printXcodeHint();
-
+  /**
+   * A host we spawned ourselves reached VidraPage. Reported per launch, not
+   * per session: under the "rebuild" loop each save produces a new one, and
+   * "the app is back up" is the thing the developer is waiting to see.
+   */
+  private onHostReady(): void {
+    if (this.shuttingDown) return;
+    this.watchReady = true;
+    const loop = this.hotReload ? ` ${dim(`\u00b7 ${this.csharpLoopSuffix}`)}` : "";
     console.log(
       taggedRow(
-        "manual",
+        "done",
         "host",
-        dim("build failed \u2014 fix the error and save to retry, or ctrl-c to stop"),
+        `${dim("host ready \u2014")} ${value(this.project.projectName)}${loop}`,
       ),
     );
   }
 
   /**
-   * `dotnet watch` exited before the app ever started — typically an SDK or
-   * MAUI workload set that predates `dotnet run`/`dotnet watch` support for
-   * this target. Explain why, then launch the host the classic way (one
-   * build + direct spawn) so the dev session still works, minus C# hot reload.
+   * The app the watcher launched is up. Says "host ready" when the app told us
+   * so itself (the VidraPage sentinel) and "launched" when all we have is the
+   * watcher's own start message, which only means a process was spawned. Both
+   * paths through the session — this one and {@link onHostReady} — report
+   * readiness in the same words, so "the app is up" is one thing to look for
+   * rather than two.
+   */
+  private announceHostLaunched(sawSentinel: boolean): void {
+    if (this.watchReady) return;
+    this.watchReady = true;
+    const loop = dim(`\u00b7 ${this.csharpLoopSuffix}`);
+    console.log(
+      taggedRow(
+        "done",
+        "host",
+        sawSentinel
+          ? `${dim("host ready \u2014")} ${value(this.project.projectName)} ${loop}`
+          : `${dim("launched")} ${value(this.project.projectName)} ${dim(`\u2014 ${this.csharpLoopLabel}`)}`,
+      ),
+    );
+  }
+
+  /**
+   * "rebuild" strategy: a build just succeeded, so replace the running app with
+   * the one that was built. Serialized, because a burst of saves produces a
+   * burst of successful builds and two hosts must never run at once — the
+   * last request wins.
+   */
+  private async launchOrRelaunchHost(): Promise<void> {
+    if (this.shuttingDown) return;
+    if (this.relaunching) {
+      this.relaunchPending = true;
+      return;
+    }
+    this.relaunching = true;
+
+    try {
+      do {
+        this.relaunchPending = false;
+
+        const previous = this.hostChild;
+        if (previous) {
+          this.hostChild = undefined;
+          console.log(taggedRow("active", "host", dim("relaunching…")));
+          killChild(previous);
+          await waitForExit(previous, HOST_TERMINATION_TIMEOUT_MS);
+        }
+        if (this.shuttingDown) return;
+
+        // The watcher already built it; go straight to signing and spawning.
+        // Readiness is announced by onHostReady when the app says so itself;
+        // spawning only means the loop is live.
+        this.hostChild = this.spawnMacosHost({ fatal: false }) ?? undefined;
+        if (this.hostChild) this.watchReady = true;
+      } while (this.relaunchPending && !this.shuttingDown);
+    } finally {
+      this.relaunching = false;
+    }
+  }
+
+  /**
+   * The hot reload agent is gone and `dotnet watch` has stopped trying to reach
+   * it. Every later edit would be applied to nothing while the watcher keeps
+   * reporting success, so the session stops asking for deltas and drives the
+   * loop itself: the watcher is restarted as `dotnet watch build`, and each
+   * successful build relaunches the app.
+   *
+   * Restarting the watcher also takes the app down with it (it leads the
+   * process group), which is what makes the first rebuild land on a clean
+   * process instead of one whose agent has already given up.
+   */
+  private async switchToRebuildLoop(): Promise<void> {
+    if (this.shuttingDown || this.strategy !== "delta") return;
+    this.strategy = "rebuild";
+
+    console.log();
+    console.log(
+      taggedRow(
+        "manual",
+        "host",
+        dim(
+          "the hot reload agent dropped out — dotnet watch would keep reporting edits as applied",
+        ),
+      ),
+    );
+    console.log(
+      taggedRow(
+        "active",
+        "host",
+        dim("switching this session to rebuild + relaunch on save…"),
+      ),
+    );
+    console.log(
+      footer(
+        dim(
+          "a known Mac Catalyst flake (dotnet/sdk#55488) — restarting vidra dev often gets deltas back",
+        ),
+      ),
+    );
+    console.log();
+
+    const previous = this.watchChild;
+    // Cleared first: from here on its exit is expected and ignored.
+    this.watchChild = undefined;
+    if (previous) {
+      killChild(previous, { processGroup: true });
+      await waitForExit(previous, HOST_TERMINATION_TIMEOUT_MS);
+    }
+    if (this.shuttingDown) return;
+
+    // The next cycle is a build, not a run: its outcome is what launches the
+    // app, so start from a clean slate rather than the dead session's verdict.
+    this.buildOutcome = null;
+    this.everBuilt = false;
+    this.launchHostWithWatch();
+  }
+
+  /**
+   * `dotnet watch` exited before the app ever started — an incomplete SDK or
+   * MAUI workload install, usually. Explain why, then launch the host the
+   * classic way (one build + direct spawn) so the dev session still works,
+   * minus anything that reacts to a C# edit.
    */
   private fallBackToClassicLaunch(
     code: number | null,
@@ -530,11 +879,13 @@ class DevSession {
       taggedRow(
         "manual",
         "host",
-        `${dim("C# hot reload unavailable \u2014 dotnet watch exited with")} ${value(
+        `${dim("the C# watch loop is unavailable \u2014 dotnet watch exited with")} ${value(
           signal ? `signal ${signal}` : `code ${code ?? "unknown"}`,
         )}`,
       ),
     );
+
+    this.fellBackToClassic = true;
 
     if (looksLikeMissingWorkload(this.watchOutputTail)) {
       printWorkloadHint();
@@ -545,9 +896,7 @@ class DevSession {
     } else {
       console.log(
         footer(
-          dim(
-            "C# hot reload needs the .NET 10.0.203+ workload set (Mac Catalyst dotnet-watch support) \u2014 try:",
-          ),
+          dim("nothing in the output explains it \u2014 an incomplete toolchain is the usual cause:"),
         ),
       );
       console.log(fixLine("dotnet workload update"));
@@ -618,23 +967,42 @@ class DevSession {
 
   private launchMacosHost(): ChildProcess {
     this.buildHostSync();
+    // A one-shot launch has nothing to retry with, so a missing bundle is fatal
+    // \u2014 `fatal` exits inside spawnMacosHost; this keeps the return type honest.
+    const host = this.spawnMacosHost({ fatal: true });
+    if (!host) process.exit(1);
+    return host;
+  }
+
+  /**
+   * Locate the built `.app`, sign it if we can, and spawn its executable.
+   *
+   * Split out from {@link launchMacosHost} because the watch loop reaches this
+   * point with the build already done — and, unlike a one-shot launch, must
+   * survive a bad outcome: under `"rebuild"` the session stays alive so the
+   * next save can put things right, hence `fatal: false` returning null rather
+   * than exiting the process.
+   */
+  private spawnMacosHost(opts: { fatal: boolean }): ChildProcess | null {
+    const outputDir = path.join(
+      this.project.hostDir,
+      "bin",
+      this.buildConfig,
+      this.target.framework,
+    );
+
+    const fail = (detail: string): null => {
+      console.error(row({ glyph: "error", detail: dim(detail) }));
+      if (opts.fatal) process.exit(1);
+      return null;
+    };
 
     const appBundle = findMacAppBundle(
       this.project.hostDir,
       this.target.framework,
       this.buildConfig,
     );
-    if (!appBundle) {
-      console.error(
-        row({
-          glyph: "error",
-          detail: dim(
-            `could not find .app bundle in ${path.join(this.project.hostDir, "bin", this.buildConfig, this.target.framework)}`,
-          ),
-        }),
-      );
-      process.exit(1);
-    }
+    if (!appBundle) return fail(`could not find .app bundle in ${outputDir}`);
 
     signMacAppBundleIfPossible(appBundle, {
       verbose: this.verbose,
@@ -644,17 +1012,13 @@ class DevSession {
 
     const binary = findMacExecutable(appBundle);
     if (!binary) {
-      console.error(
-        row({
-          glyph: "error",
-          detail: dim(`could not find the app executable in ${appBundle}`),
-        }),
-      );
-      process.exit(1);
+      return fail(`could not find the app executable in ${appBundle}`);
     }
 
+    // "launching", not "launched": readiness is a claim only the app can make,
+    // and it makes it via the sentinel (see onHostReady).
     console.log(
-      taggedRow("done", "host", `${dim("launched")} ${value(path.basename(appBundle))}`),
+      taggedRow("active", "host", `${dim("launching")} ${value(path.basename(appBundle))}${dim("\u2026")}`),
     );
     const host = spawn(binary, [], {
       cwd: this.project.root,
@@ -694,7 +1058,7 @@ class DevSession {
     }
 
     console.log(
-      taggedRow("done", "host", `${dim("launched")} ${value(path.basename(exe))}`),
+      taggedRow("active", "host", `${dim("launching")} ${value(path.basename(exe))}${dim("\u2026")}`),
     );
     const host = spawn(exe, [], {
       cwd: path.dirname(exe),
@@ -711,15 +1075,25 @@ class DevSession {
   ): ChildProcess {
     this.children.push(child);
     // Host processes emit the readiness sentinel in dev sessions; it's CLI
-    // plumbing (see classifyWatchLine), not output the user should see.
+    // plumbing (see classifyWatchLine), not output the user should see \u2014 but it
+    // is how we know the app got as far as VidraPage rather than merely being
+    // spawned, so it is consumed rather than only suppressed.
     const include =
       tag === "host"
         ? (line: string): boolean => !line.includes(HOST_READY_SENTINEL)
         : undefined;
     prefixStream(child.stdout, tag, include);
     prefixStream(child.stderr, tag, include);
+    if (tag === "host") {
+      const onLine = (line: string): void => {
+        if (line.includes(HOST_READY_SENTINEL)) this.onHostReady();
+      };
+      scanStream(child.stdout, onLine);
+      scanStream(child.stderr, onLine);
+    }
 
     child.on("exit", (code, signal) => {
+      this.forgetChild(child);
       if (this.shuttingDown) return;
 
       if (tag === "ui") {
@@ -728,6 +1102,23 @@ class DevSession {
           "\n" + row({ glyph: "error", detail: dim(`${label} exited with code ${exitCode}`) }),
         );
         this.shutdown(exitCode);
+        return;
+      }
+
+      // A host we own under the "rebuild" loop is expected to come and go: we
+      // kill it ourselves on every rebuild, and the user may close its window.
+      // Either way the session lives on, exactly as `dotnet watch` does when it
+      // owns the app — the next save relaunches.
+      if (this.ownsHostProcess) {
+        if (child !== this.hostChild) return;
+        this.hostChild = undefined;
+        console.log(
+          taggedRow(
+            "manual",
+            "host",
+            dim("app not running — save a C# file to relaunch, or ctrl-c to stop"),
+          ),
+        );
         return;
       }
 
@@ -763,11 +1154,29 @@ class DevSession {
     return child;
   }
 
+  /**
+   * True while the "rebuild" loop is driving the app rather than the watcher.
+   * Goes false once we fall back to a classic launch: there is no watcher left
+   * to relaunch anything, so a host exit ends the session as it always did.
+   */
+  private get ownsHostProcess(): boolean {
+    return (
+      this.hotReload && this.strategy === "rebuild" && !this.fellBackToClassic
+    );
+  }
+
+  /** Drop an exited child so a long session's relaunches don't accumulate. */
+  private forgetChild(child: ChildProcess): void {
+    const index = this.children.indexOf(child);
+    if (index !== -1) this.children.splice(index, 1);
+  }
+
   private shutdown(exitCode: number): void {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
 
-    for (const child of this.children) {
+    // Iterate a copy: an exiting child removes itself from `children`.
+    for (const child of [...this.children]) {
       killChild(child, { processGroup: child === this.watchChild });
     }
 
@@ -947,6 +1356,26 @@ const findFileRecursive = (
 
   return null;
 };
+
+/**
+ * Resolves when `child` has exited, or after `timeoutMs` \u2014 in which case it is
+ * SIGKILLed, because the caller's next step is to start a replacement.
+ */
+const waitForExit = (child: ChildProcess, timeoutMs: number): Promise<void> =>
+  new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve();
+    }, timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 
 const killChild = (
   child: ChildProcess,
