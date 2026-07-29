@@ -9,7 +9,6 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>Vidra.Modules.Dialogs</PackageId>
-    <Version>0.3.0</Version>
     <VidraContractScope>Core</VidraContractScope>
   </PropertyGroup>
 

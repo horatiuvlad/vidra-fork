@@ -69,6 +69,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # One version for everything Vidra publishes. Cheap, and it fails the
+      # commit rather than the release: npm and nuget.org both refuse to
+      # re-publish a version, so drift discovered at publish time is permanent.
+      - name: Versions are consistent
+        run: node scripts/version.mjs check
+
       # ---- C# unit + contract + codegen snapshots ----
       - name: Restore C# test projects
         run: |

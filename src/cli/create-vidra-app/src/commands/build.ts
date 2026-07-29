@@ -3,6 +3,7 @@ import fs from "fs-extra";
 import { execSync } from "node:child_process";
 import { parseArgs } from "../utils.js";
 import { formatBuildError, formatProcessError } from "../exec.js";
+import { resolveAppVersion, versionPublishArgs } from "../version.js";
 import {
   detectPlatform,
   detectProject,
@@ -453,9 +454,13 @@ const stepDotnetPublish = (
   const start = Date.now();
 
   const extraArgs = target.extraPublishArgs ?? "-p:CreatePackage=false";
+  // The app's package.json owns the version; stamp it into the bundle so the
+  // artifact, its metadata and any future updater all agree on one number.
+  const version = resolveAppVersion(project.root, project.csprojPath);
+  const versionArgs = versionPublishArgs(version).join(" ");
   try {
     execSync(
-      `dotnet publish "${project.csprojPath}" -c Release -f ${target.framework} ${extraArgs}`,
+      `dotnet publish "${project.csprojPath}" -c Release -f ${target.framework} ${extraArgs} ${versionArgs}`,
       {
         cwd: project.root,
         stdio: verbose ? "inherit" : "pipe",

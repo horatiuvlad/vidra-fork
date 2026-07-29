@@ -2,10 +2,13 @@
 
   <!--
     Shared NuGet package metadata for all Vidra packages. Per-project csprojs
-    still own PackageId, Version, and Description. Non-packable projects (the
-    demo host app, the CodeGen tool) simply ignore these properties.
+    still own PackageId and Description; the version is shared, and derived from
+    version.json at the repo root by scripts/version.mjs — do not edit it here.
+    Non-packable projects (the demo host app, the CodeGen tool) ignore these.
   -->
   <PropertyGroup>
+    <VidraVersion>0.4.0</VidraVersion>
+    <Version>$(VidraVersion)</Version>
     <Authors>rzamfiriu</Authors>
     <Company>Vidra</Company>
     <Product>Vidra</Product>
