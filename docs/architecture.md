@@ -163,6 +163,6 @@ export class FilesystemProxy {
 
 Enums cross the wire as their **camelCase string name**, not a numeric value. Native serialization and generated AOT codecs share that policy, so JSON matches the generated string-literal unions. Nullable values (`int?`, `string?`) are omitted when null, which the emitter reflects as optional `field?: T | null`.
 
-Built-in contracts are generated into the SDK. App and opted-in third-party contracts are generated into the app’s configured `VidraTsOutputDir` by the packaged `buildTransitive` target. Generated output is deterministic and committed; `VidraCodeGenCheck` fails CI when it is stale.
+Built-in contracts are generated into the SDK. App and opted-in third-party contracts are generated into the app’s configured `VidraTsOutputDir` by the packaged `buildTransitive` target. Both go through the same `Vidra.CodeGen.targets`: a project scans its own output by default, or lists `VidraCodeGenAssembly` items to aggregate several assemblies into one barrel — which is how the dogfood host regenerates the SDK’s built-in contracts under `VidraContractScope=core`. Generated output is deterministic and committed; `VidraCodeGenCheck` fails CI when it is stale.
 
 At WebView startup, protocol version 2 compares separate core and app manifest fingerprints. A mismatched SDK, native package set, or committed app output fails visibly before bridge traffic starts. The supported claim is therefore: **end-to-end typed contracts, with an explicit unsafe escape hatch**.

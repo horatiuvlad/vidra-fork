@@ -98,6 +98,9 @@ jobs:
         run: |
           dotnet msbuild tests/dotnet/Vidra.CodeGen.AppFixture/Vidra.CodeGen.AppFixture.csproj -p:Configuration=Release -t:VidraCodeGenCheck
           dotnet msbuild tests/dotnet/Vidra.CodeGen.AppFixture/MissingAggregateTarget.proj -t:VidraCodeGen
+          # Multi-assembly, core-scope codegen — the shape the dogfood host uses,
+          # exercised here so it isn't only covered by the two platform jobs.
+          dotnet msbuild tests/dotnet/Vidra.CodeGen.AppFixture/AggregateScope.proj -t:VerifyAggregateCodeGen
 
       - name: Run Vidra.Modules.FileSystem.Tests
         run: dotnet test tests/dotnet/Vidra.Modules.FileSystem.Tests/Vidra.Modules.FileSystem.Tests.csproj -c Release --no-build --logger "trx;LogFileName=modules-filesystem.trx"
@@ -324,14 +327,23 @@ jobs:
       - name: Build the dogfood host (${{ matrix.tfm }})
         shell: bash
         run: |
-          # The host's post-build codegen target shells out to
-          # `dotnet run --no-build --project Vidra.CodeGen`, which requires the
-          # tool to already be built — true after a solution build, not in a
-          # clean checkout. Build it first so this step tests the host rather
-          # than that ordering quirk.
-          dotnet build src/tools/Vidra.CodeGen/Vidra.CodeGen.csproj -c Debug
+          # No preparatory build of Vidra.CodeGen: the host's post-build codegen
+          # runs the tool with `--no-build`, and ordering that is the host's own
+          # job (it carries a build-order ProjectReference to the tool). Wiping
+          # the tool's Debug output first keeps this a clean-checkout test even
+          # if some earlier step in this job starts building it.
+          rm -rf src/tools/Vidra.CodeGen/bin/Debug
           dotnet build src/host/Vidra.Host.Maui/Vidra.Host.Maui.csproj \
             -c Debug -f ${{ matrix.tfm }}
+
+      # This build is what regenerates the SDK's committed built-in contracts,
+      # so it is also the only place drift in them can be caught. macOS only:
+      # the runner checks out with autocrlf, the generator writes LF, and every
+      # regenerated file would read as modified on Windows.
+      - name: Built-in contracts are unchanged by the dogfood build
+        if: runner.os == 'macOS'
+        shell: bash
+        run: git diff --exit-code -- src/sdk/vidra-js/src/generated
 
       - name: Pack local NuGet feed
         shell: bash

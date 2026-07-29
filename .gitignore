@@ -11,6 +11,8 @@ obj/
 *.DotSettings.user
 .vs/
 TestResults/
+# Scratch output of AggregateScope.proj; removed on success, left behind on failure
+tests/dotnet/Vidra.CodeGen.AppFixture/generated-aggregate/
 BenchmarkDotNet.Artifacts/
 *.received.*
 *.coverage
