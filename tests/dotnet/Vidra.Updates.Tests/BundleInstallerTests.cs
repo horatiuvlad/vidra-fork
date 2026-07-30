@@ -122,6 +122,24 @@ public sealed class BundleInstallerTests : IDisposable
     }
 
     [Fact]
+    public async Task Stops_a_download_that_exceeds_its_declared_size()
+    {
+        // The size in the manifest is covered by the signature, so a stream that
+        // keeps going past it is lying — and stopping mid-copy is what prevents
+        // a hostile feed from filling the disk before the hash check runs.
+        var feed = Feed();
+        var entry = Publish(feed, "1.1.0", ("index.html", new string('x', 50_000)));
+        var undersold = entry with { Size = 1_000 };
+        var store = Store();
+
+        var install = async () => await new BundleInstaller(store)
+            .InstallAsync(new FileBundleSource(feed), undersold);
+
+        await install.Should().ThrowAsync<BundleVerificationException>().WithMessage("*exceeds its declared size*");
+        Directory.GetFiles(store.RootDirectory, ".download-*.zip").Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task A_feed_url_cannot_read_outside_the_feed_directory()
     {
         var feed = Feed();

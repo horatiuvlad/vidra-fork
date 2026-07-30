@@ -34,7 +34,7 @@ public static class WebAssetRoot
     /// <c>vidra/bundles/state.json</c> before the WebView exists. Pass
     /// <see langword="null"/> to go back to the embedded copy.
     /// </summary>
-    public static void UseResolver(Func<string?>? resolver) => _resolver = resolver;
+    internal static void UseResolver(Func<string?>? resolver) => _resolver = resolver;
 
     /// <summary>
     /// Returns a validated external asset directory, or <see langword="null"/>
