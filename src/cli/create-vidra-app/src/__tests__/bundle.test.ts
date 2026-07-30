@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createZip, readDirectoryEntries, crc32 } from "../zip.js";
-import { mergeManifest, readManifest, type BundleManifest } from "../commands/bundle.js";
+import {
+  mergeManifest,
+  parseBundleOptions,
+  readManifest,
+  type BundleManifest,
+} from "../commands/bundle.js";
 import { readUpdateConfig, stampUpdateConfig, UPDATE_CONFIG_FILE } from "../update-config.js";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "vidra-bundle-"));
@@ -69,6 +74,30 @@ describe("zip writer", () => {
       "assets/app.js",
       "index.html",
     ]);
+  });
+});
+
+describe("bundle options", () => {
+  it("reads the flags a publisher actually passes", () => {
+    // The first two flags are the ones a mis-padded parseArgs drops, which is
+    // how this shipped once: `vidra bundle` rebuilt the UI and wrote to the
+    // default directory while reporting success.
+    expect(parseBundleOptions(["--skip-build", "--out", "/tmp/feed", "--channel", "beta"])).toEqual({
+      out: "/tmp/feed",
+      channel: "beta",
+      skipBuild: true,
+    });
+  });
+
+  it("accepts --key=value too", () => {
+    expect(parseBundleOptions(["--out=feed", "--channel=stable"])).toMatchObject({
+      out: "feed",
+      channel: "stable",
+    });
+  });
+
+  it("defaults to dist/ and a real build", () => {
+    expect(parseBundleOptions([])).toEqual({ out: "dist", channel: undefined, skipBuild: false });
   });
 });
 

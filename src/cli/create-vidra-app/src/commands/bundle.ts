@@ -43,18 +43,37 @@ export interface BundleManifest {
 
 const SCHEMA = 1;
 
+export interface BundleOptions {
+  out: string;
+  channel?: string;
+  skipBuild: boolean;
+}
+
+/**
+ * Reads the command's flags.
+ *
+ * The `["_", "_", ...]` padding is the house convention: `parseArgs` is written
+ * for a raw `process.argv` and skips the first two entries, so a command that
+ * passes its own already-sliced argv silently loses its first two flags.
+ */
+export const parseBundleOptions = (argv: string[]): BundleOptions => {
+  const args = parseArgs(["_", "_", ...argv]);
+  return {
+    out: typeof args.out === "string" ? args.out : "dist",
+    channel: typeof args.channel === "string" ? args.channel : undefined,
+    skipBuild: !!args["skip-build"],
+  };
+};
+
 export const bundleCommand = async (argv: string[]): Promise<void> => {
-  const args = parseArgs(argv);
+  const options = parseBundleOptions(argv);
   const project = detectProject(process.cwd());
-  const outDir = path.resolve(
-    project.root,
-    typeof args.out === "string" ? args.out : "dist",
-  );
-  const channel = typeof args.channel === "string" ? args.channel : undefined;
+  const outDir = path.resolve(project.root, options.out);
+  const channel = options.channel;
 
   console.log(header("bundle", `${project.projectName} ${project.displayVersion}`));
 
-  if (!args["skip-build"]) {
+  if (!options.skipBuild) {
     stepBuildUi(project);
   }
 
