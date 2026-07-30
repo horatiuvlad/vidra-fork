@@ -17,6 +17,15 @@ export interface UpdateConfig {
   feedUrl?: string;
   channel?: string;
   enabled?: boolean;
+  /**
+   * Base64 SPKI public keys the app will accept a manifest from. More than one
+   * so a key can be rotated: publish under the new key while installed apps
+   * still trust the old one, then drop the old one a release later.
+   *
+   * Configuring any key makes signatures **required** — an app that trusts a key
+   * refuses an unsigned feed, which is the whole point.
+   */
+  publicKeys?: string[];
 }
 
 /** The name the host looks for, as a MAUI app-package asset. */
@@ -47,6 +56,17 @@ export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {
   }
   if (typeof raw.enabled === "boolean") {
     config.enabled = raw.enabled;
+  }
+
+  // `publicKey` (one) and `publicKeys` (several) both work; rotation needs the
+  // plural, and a single key is the common case.
+  const keys = [
+    ...(typeof raw.publicKey === "string" ? [raw.publicKey] : []),
+    ...(Array.isArray(raw.publicKeys) ? raw.publicKeys : []),
+  ].filter((key): key is string => typeof key === "string" && key.trim().length > 0);
+
+  if (keys.length > 0) {
+    config.publicKeys = keys.map((key) => key.trim());
   }
 
   // A block with nothing usable in it is the same as no block: better to ship no

@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "bundles": [
+    {
+      "version": "1.3.0",
+      "url": "bundle-1.3.0-4ab2e68d.zip",
+      "sha256": "b34751ffc8072ffbab70ae7c609111fff302a1ad56db2b9b6f0d6a927945050d",
+      "size": 66780,
+      "coreFingerprint": "a4d6e4856749f06fd3c84be9bb5a468c5219e71797777a977a2d0772dc6214db",
+      "appFingerprint": "d3044812d17c42049962d730fced04a6ecd711e287cdd0da7b218b327ee6cd56"
+    }
+  ]
+}

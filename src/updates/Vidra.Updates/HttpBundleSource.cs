@@ -42,6 +42,18 @@ public sealed class HttpBundleSource : IBundleSource, IDisposable
         return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task<string?> GetManifestSignatureAsync(CancellationToken ct = default)
+    {
+        var signatureUri = new Uri(_manifestUri + ".sig");
+
+        using var response = await _http.GetAsync(signatureUri, ct).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task<Stream> OpenBundleAsync(string url, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);

@@ -13,13 +13,15 @@
 //   mismatch   a bundle for a different contract is refused, however new
 //   corrupt    a bundle whose sha256 does not match is refused
 //   rollback   a bundle that never boots is undone after two attempts
+//   tampered   a manifest edited after signing is refused
+//   unsigned   a feed that drops its signature is refused
 //
 // Usage:
 //   node ota-e2e.mjs --bin <app binary> --project <scaffold root> --cli <cli.js>
 //                    --work <scratch dir> [--port 8099]
 
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import crypto, { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -29,6 +31,7 @@ const project = required("project");
 const cli = required("cli");
 const work = required("work");
 const port = Number(args.port ?? 8099);
+const signingKey = args["signing-key"] ?? null;
 const feed = path.join(work, "feed");
 
 const MARKER = "ota-bundle-1-3-0";
@@ -116,6 +119,37 @@ try {
   // A rolled-back bundle must never be reinstalled, or rollback is a loop.
   const afterRollback = launch("after-rollback");
   expect(afterRollback.pendingVersion, null, "the failed bundle is not downloaded again");
+
+  if (signingKey) {
+    // ---- tampered: the index changed after it was signed -------------------
+    // This is the attack signing exists to stop: a feed host swapping in an
+    // entry pointing at an archive of its choosing, with a hash that matches it.
+    const tampered = readManifest();
+    tampered.bundles.push({
+      version: "2.0.0",
+      url: goodArchive.name,
+      sha256: goodArchive.sha256,
+      size: goodArchive.size,
+      coreFingerprint: fingerprints.core,
+      appFingerprint: fingerprints.app,
+    });
+    writeManifest(tampered, { sign: false });
+    console.log("==> feed edited to offer 2.0.0, signature left untouched");
+
+    const edited = launch("tampered");
+    expect(edited.pendingVersion, null, "an unsigned edit to the manifest is refused");
+    expect(edited.currentVersion, "1.3.0", "and nothing about what is running changed");
+
+    // ---- unsigned: the signature simply disappears --------------------------
+    // Fail closed. Dropping the file is what an attacker who cannot forge a
+    // signature would try next.
+    fs.rmSync(path.join(feed, "bundles.json.sig"), { force: true });
+    console.log("==> signature removed from the feed");
+
+    const stripped = launch("unsigned");
+    expect(stripped.pendingVersion, null, "a feed that drops its signature is refused");
+    expect(stripped.currentVersion, "1.3.0", "and nothing about what is running changed");
+  }
 } catch (error) {
   failures++;
   console.log(`::error::${error.message}`);
@@ -147,7 +181,11 @@ function publishGoodBundle() {
   pkg.version = "1.3.0";
   fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 
-  run("node", [cli, "bundle", "--skip-build", "--out", feed], project);
+  run(
+    "node",
+    [cli, "bundle", "--skip-build", "--out", feed, ...(signingKey ? ["--sign", signingKey] : [])],
+    project,
+  );
 
   const manifest = readManifest();
   const entry = manifest.bundles.at(-1);
@@ -183,11 +221,38 @@ function publishBrokenBundle(version) {
   };
 }
 
+/** Adds an entry the way a publisher would — re-signing what it changed. */
 function addEntry(entry) {
   const manifest = readManifest();
   manifest.bundles.push(entry);
-  fs.writeFileSync(path.join(feed, "bundles.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeManifest(manifest, { sign: true });
   console.log(`==> feed now offers ${entry.version}`);
+}
+
+function writeManifest(manifest, { sign }) {
+  const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(feed, "bundles.json"), bytes);
+
+  if (!signingKey) return;
+
+  if (sign) {
+    const signature = crypto.sign("sha256", bytes, crypto.createPrivateKey(fs.readFileSync(signingKey, "utf8")));
+    const spki = crypto
+      .createPublicKey(crypto.createPrivateKey(fs.readFileSync(signingKey, "utf8")))
+      .export({ format: "der", type: "spki" });
+    fs.writeFileSync(
+      path.join(feed, "bundles.json.sig"),
+      `${JSON.stringify(
+        {
+          algorithm: "ecdsa-p256-sha256",
+          keyId: crypto.createHash("sha256").update(spki).digest("hex").slice(0, 8),
+          signature: signature.toString("base64"),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
 }
 
 function readManifest() {

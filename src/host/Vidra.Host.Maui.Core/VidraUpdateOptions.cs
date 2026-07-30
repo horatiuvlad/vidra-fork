@@ -43,6 +43,21 @@ public sealed class VidraUpdateOptions
     /// </summary>
     public TimeSpan StartupDelay { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Base64 SPKI public keys this app accepts a signed manifest from.
+    /// </summary>
+    /// <remarks>
+    /// Configuring any key makes a signature <b>required</b>: an unsigned feed,
+    /// or one signed by a key that is not here, is refused. That is the point —
+    /// the <c>sha256</c> on each entry proves an archive arrived intact, but only
+    /// a signature proves who published the index that named it, and a feed host
+    /// that can serve a manifest can serve a matching archive too.
+    ///
+    /// More than one so a key can be rotated: publish under the new key while
+    /// installed apps still trust the old one.
+    /// </remarks>
+    public IList<string> PublicKeys { get; } = [];
+
     /// <summary>Extra request headers — an authorization token for a private feed, say.</summary>
     public IReadOnlyDictionary<string, string>? Headers { get; set; }
 

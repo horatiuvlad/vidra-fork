@@ -179,6 +179,36 @@ describe("vidra.update config", () => {
     expect(readUpdateConfig(project({ name: "app", vidra: { update: { feedUrl: "  " } } }))).toBeNull();
   });
 
+  it("reads a single publicKey and a publicKeys array", () => {
+    const single = project({
+      name: "app",
+      vidra: { update: { feedUrl: "https://e.com/b.json", publicKey: "AAA" } },
+    });
+    const many = project({
+      name: "app",
+      vidra: { update: { feedUrl: "https://e.com/b.json", publicKeys: ["AAA", "BBB"] } },
+    });
+
+    expect(readUpdateConfig(single)?.publicKeys).toEqual(["AAA"]);
+    // Several so a key can be rotated: publish under the new one while
+    // installed apps still trust the old one.
+    expect(readUpdateConfig(many)?.publicKeys).toEqual(["AAA", "BBB"]);
+  });
+
+  it("has no keys when none are configured, which is what allows an unsigned feed", () => {
+    const root = project({ name: "app", vidra: { update: { feedUrl: "https://e.com/b.json" } } });
+
+    expect(readUpdateConfig(root)?.publicKeys).toBeUndefined();
+  });
+
+  it("stamps the keys so the host can require a signature", () => {
+    const hostDir = tmp();
+    stampUpdateConfig(hostDir, { feedUrl: "https://e.com/b.json", publicKeys: ["AAA"] });
+
+    const stamped = path.join(hostDir, "Resources", "Raw", UPDATE_CONFIG_FILE);
+    expect(JSON.parse(fs.readFileSync(stamped, "utf8")).publicKeys).toEqual(["AAA"]);
+  });
+
   it("keeps an explicit enabled:false", () => {
     const root = project({
       name: "app",

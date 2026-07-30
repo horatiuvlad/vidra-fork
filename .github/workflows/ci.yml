@@ -555,14 +555,20 @@ jobs:
         run: |
           # The opt-in a real app makes: one builder call, and a feed in
           # package.json that `vidra build` stamps into the bundle.
+          # A real signing key, made by the command a publisher would run. The
+          # public half goes into package.json, which makes signatures mandatory
+          # for this app — so the whole run also proves the signed path works.
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            keygen --out ota-signing-key.pem
           node -e "
             const fs = require('fs');
             const file = 'src/VidraSmoke.Host/MauiProgram.cs';
             const source = fs.readFileSync(file, 'utf8');
             if (!source.includes('.UseVidra()')) { console.error('no UseVidra() call to extend'); process.exit(1); }
             fs.writeFileSync(file, source.replace('.UseVidra()', '.UseVidra()\n            .UseVidraUpdates()'));
+            const publicKey = fs.readFileSync('ota-signing-key.pem.pub', 'utf8').trim();
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.vidra = { update: { feedUrl: 'http://127.0.0.1:8099/bundles.json' } };
+            pkg.vidra = { update: { feedUrl: 'http://127.0.0.1:8099/bundles.json', publicKeys: [publicKey] } };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           sed 's/__PROJECT_NAMESPACE__/VidraSmoke/' \
@@ -606,6 +612,7 @@ jobs:
             --bin "$OTA_BIN" \
             --project "$(native "$PWD")" \
             --cli "$(native "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js")" \
+            --signing-key "$(native "$PWD/ota-signing-key.pem")" \
             --work "$(native "${{ runner.temp }}/ota-work")"
 
       - name: Upload OTA proofs
