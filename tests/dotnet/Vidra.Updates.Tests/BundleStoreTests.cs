@@ -49,6 +49,19 @@ public sealed class BundleStoreTests : IDisposable
     }
 
     [Fact]
+    public void Two_states_with_the_same_contents_are_equal()
+    {
+        // A record compares its list property by reference, so without explicit
+        // equality a state written and read back would never equal itself.
+        var left = new UpdateState { Current = Sha('a'), Blocked = [Sha('b'), Sha('c')] };
+        var right = new UpdateState { Current = Sha('a'), Blocked = [Sha('b'), Sha('c')] };
+
+        left.Should().Be(right);
+        left.GetHashCode().Should().Be(right.GetHashCode());
+        left.Should().NotBe(right with { Blocked = [Sha('b')] });
+    }
+
+    [Fact]
     public void An_empty_state_round_trips_as_the_embedded_bundle()
     {
         var store = new BundleStore(_appData);
