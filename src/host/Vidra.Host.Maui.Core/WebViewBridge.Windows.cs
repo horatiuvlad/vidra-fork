@@ -46,29 +46,39 @@ public sealed partial class WebViewBridge
     }
 
     /// <summary>
-    /// The one host name Vidra serves web assets under, whichever directory they
-    /// come from. WebView2 resolves it internally, ahead of DNS, so it never
-    /// reaches the network; <c>.invalid</c> is reserved by RFC 2606, so it can
-    /// never collide with a real domain the app might want to fetch.
+    /// MAUI's own virtual host for app content. Reused deliberately.
     /// </summary>
     /// <remarks>
-    /// Origin stability is the reason this is used for the embedded copy too.
-    /// MAUI's own default serves the embedded assets from
-    /// <c>https://appdir/wwwroot/index.html</c>; pointing an updated bundle at a
-    /// different host would move the page to a different *origin*, silently
-    /// resetting localStorage, IndexedDB, caches and cookies every time an update
-    /// is promoted or rolled back. One fixed host keeps the app's stored data
-    /// across bundle swaps.
+    /// The MAUI WebView2 handler maps <c>appdir</c> to the application directory
+    /// and serves the embedded copy from <c>https://appdir/wwwroot/index.html</c>.
+    /// An updated bundle is mapped to the same host and loaded from
+    /// <c>https://appdir/index.html</c> — a different path, but the *same origin*,
+    /// which is what localStorage, IndexedDB, caches and cookies are keyed on.
+    ///
+    /// The alternative was a host of our own, which gives the same stability
+    /// across bundle swaps but moves every existing app off MAUI's origin once,
+    /// including apps that never enable updates. Reusing MAUI's host means an app
+    /// that never updates sees no change at all, and one that does keeps its data
+    /// across every promotion and rollback.
     /// </remarks>
-    private const string VirtualHostName = "vidra.invalid";
+    private const string VirtualHostName = "appdir";
 
     partial void LoadProductionAssetsCore(WebView webView)
     {
         var externalRoot = WebAssetRoot.Resolve();
-        var embeddedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "wwwroot");
-        var root = externalRoot ?? embeddedRoot;
 
-        if (WebAssetRoot.PreferFileUrlOnWindows() && externalRoot is not null)
+        if (externalRoot is null)
+        {
+            // Nothing to redirect: let the handler serve the embedded copy the
+            // way it always has, including its own appdir mapping.
+            WebAssetRoot.Announce("wwwroot/index.html", external: false, "MAUI relative source");
+            webView.Source = new UrlWebViewSource { Url = "wwwroot/index.html" };
+            return;
+        }
+
+        var root = externalRoot;
+
+        if (WebAssetRoot.PreferFileUrlOnWindows())
         {
             // Kept as an escape hatch, not the default: a file:// URL is an
             // opaque origin, so the page loses everything the virtual host gives
@@ -97,12 +107,16 @@ public sealed partial class WebViewBridge
                     throw new FileNotFoundException($"no index.html under '{root}'");
 
                 await webView2.EnsureCoreWebView2Async();
+
+                // Re-points MAUI's own mapping at the bundle. Same host, so the
+                // page keeps the origin — and everything stored under it — that
+                // the embedded copy had.
                 webView2.CoreWebView2.SetVirtualHostNameToFolderMapping(
                     VirtualHostName,
                     root,
                     CoreWebView2HostResourceAccessKind.Allow);
 
-                WebAssetRoot.Announce(root, externalRoot is not null, $"https://{VirtualHostName}");
+                WebAssetRoot.Announce(root, external: true, $"https://{VirtualHostName}");
                 webView.Source = new UrlWebViewSource { Url = $"https://{VirtualHostName}/index.html" };
             }
             catch (Exception ex)
