@@ -69,6 +69,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # One version for everything Vidra publishes. Cheap, and it fails the
+      # commit rather than the release: npm and nuget.org both refuse to
+      # re-publish a version, so drift discovered at publish time is permanent.
+      - name: Versions are consistent
+        run: node scripts/version.mjs check
+
       # ---- C# unit + contract + codegen snapshots ----
       - name: Restore C# test projects
         run: |
@@ -435,6 +441,16 @@ jobs:
           echo "---- MainPage.cs ----"
           head -25 src/VidraSmoke.Host/MainPage.cs
 
+      # Proves the whole version chain end to end, and proves it is the app's
+      # package.json driving it: 1.2.3 exists nowhere else, so a bundle carrying
+      # it cannot have come from the template's csproj default.
+      - name: Set a distinctive app version
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node -e "const f='package.json',p=require('./'+f);p.version='1.2.3';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+          node -p "require('./package.json').version"
+
       - name: Preview the build plan (vidra build --plan)
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
@@ -449,6 +465,29 @@ jobs:
         run: |
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
             build --target ${{ matrix.target }} --verbose
+
+      # ApplicationDisplayVersion -> CFBundleShortVersionString, and the derived
+      # build number -> CFBundleVersion (0.1.0 would have been 100; 1.2.3 is
+      # 1*10000 + 2*100 + 3).
+      - name: The app version reached the bundle (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          plist="$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -name Info.plist -path '*.app/Contents/*' -print -quit)"
+          echo "plist: $plist"
+          short="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+          build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")"
+          echo "CFBundleShortVersionString=$short CFBundleVersion=$build"
+          [ "$short" = "1.2.3" ] || { echo "::error::expected 1.2.3 from package.json, got $short"; exit 1; }
+          [ "$build" = "10203" ] || { echo "::error::expected build 10203, got $build"; exit 1; }
+
+      - name: The app version reached the artifact name
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          ls -1 dist/
+          ls dist/ | grep -q "1\.2\.3" || { echo "::error::no artifact carries the app version"; exit 1; }
 
       - name: Verify a distributable artifact was produced
         shell: bash

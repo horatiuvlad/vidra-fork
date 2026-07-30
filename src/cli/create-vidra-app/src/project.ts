@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveAppVersionOrDefault } from "./version.js";
 import fs from "fs-extra";
 import { dim, footer, row } from "./theme.js";
 
@@ -39,7 +40,7 @@ export const detectProject = (cwd: string): ProjectInfo => {
       const csproj = findHostCsproj(srcDir);
       if (csproj) {
         const projectName = path.basename(csproj.dir).replace(/\.Host$/, "");
-        const displayVersion = readCsprojVersion(csproj.path);
+        const displayVersion = resolveAppVersionOrDefault(dir, csproj.path);
         return {
           root: dir,
           hostDir: csproj.dir,
@@ -89,10 +90,3 @@ const findHostCsproj = (
   return null;
 };
 
-const readCsprojVersion = (csprojPath: string): string => {
-  const content = fs.readFileSync(csprojPath, "utf-8");
-  const match = content.match(
-    /<ApplicationDisplayVersion>(.*?)<\/ApplicationDisplayVersion>/,
-  );
-  return match?.[1] ?? "0.1.0";
-};

@@ -9,7 +9,6 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>Vidra.Modules.Notifications</PackageId>
-    <Version>0.3.0</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <VidraContractScope>Core</VidraContractScope>
   </PropertyGroup>

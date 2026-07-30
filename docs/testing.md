@@ -37,6 +37,7 @@ We follow a pyramid:
 | Integration | CLI `scaffold.integration.test.ts` (tmpdir scaffold)        | `ubuntu-latest`       |
 | Integration | `Vidra.CodeGen.AppFixture` build + `VidraCodeGenCheck`      | `ubuntu-latest`       |
 | Integration | `AggregateScope.proj` — multi-assembly, core-scope codegen  | `ubuntu-latest`       |
+| Guard rail  | `scripts/version.mjs check` — one version across npm + NuGet | `ubuntu-latest`       |
 | Smoke       | `tests/dotnet/Vidra.Bridge.Smoke` + `tests/smoke/echo-ping.mjs` | `windows-latest`, `macos-latest` |
 | Smoke       | CLI scaffold + `dotnet build` of scaffolded host            | `windows-latest`, `macos-latest` |
 | Smoke       | Dogfood host (`src/host/Vidra.Host.Maui`) build             | `windows-latest`, `macos-latest` |

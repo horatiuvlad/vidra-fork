@@ -32,6 +32,12 @@ The bridge is bidirectional — see the message round-trip in
 [interop-protocol.md](./interop-protocol.md) for the wire format, and
 [Type Safety & Codegen](#type-safety--codegen) for how the typed SDK proxies are generated.
 
+## Versioning
+
+Everything Vidra publishes shares one version — both npm packages and every NuGet package — and it lives in `version.json` at the repo root. Each place it appears (`src/cli/create-vidra-app/package.json`, `src/sdk/vidra-js/package.json`, `Directory.Build.props`) is derived and checked in, and `scripts/version.mjs check` fails CI on drift. Bump with the **Bump version** workflow, which opens a release PR; publishing stays a separate, deliberate run.
+
+An **app's** version is a different number, owned by the app's own `package.json` and bumped with `npm version patch`. `vidra build` reads it and stamps the bundle: the full semver names the artifact, `major.minor.patch` becomes `ApplicationDisplayVersion` (Apple rejects a prerelease suffix in `CFBundleShortVersionString`), and `ApplicationVersion` gets a monotonic integer derived as `major * 10000 + minor * 100 + patch` — deterministic, so the same commit always builds the same number, with `VIDRA_BUILD_NUMBER` as the escape hatch. An app scaffolded before this keeps working: the csproj value is used as a fallback.
+
 ## Host Model
 
 - **Development**: the WebView loads `http://localhost:5173` (or a configurable `VIDRA_DEV_URL`), allowing Vite HMR and standard browser dev tools. `vidra dev` runs the host under `dotnet watch`, and what a C# edit does depends on what the platform allows:

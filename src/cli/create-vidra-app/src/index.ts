@@ -27,8 +27,15 @@ const VIDRA_REPO_ROOT = path.resolve(CLI_ROOT, "..", "..", "..");
 const LOCAL_FEED_DIR = path.join(VIDRA_REPO_ROOT, "dist", "packages");
 const LOCAL_CLI_DIR = CLI_ROOT;
 const LOCAL_SDK_DIR = path.join(VIDRA_REPO_ROOT, "src", "sdk", "vidra-js");
-const VIDRA_VERSION = "0.3.1";
-const SDK_VERSION = "0.2.0";
+/**
+ * The one version Vidra publishes under — CLI, SDK and every NuGet package
+ * share it (see version.json). Read from our own package.json rather than
+ * duplicated as a literal, because a literal is a copy that drifts.
+ */
+const VIDRA_VERSION: string = JSON.parse(
+  fs.readFileSync(path.join(CLI_ROOT, "package.json"), "utf-8"),
+).version;
+const SDK_VERSION = VIDRA_VERSION;
 
 const main = async (): Promise<void> => {
   console.log();
