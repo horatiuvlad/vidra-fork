@@ -33,6 +33,14 @@
     <ProjectReference Include="..\..\..\src\updates\Vidra.Updates\Vidra.Updates.csproj" />
   </ItemGroup>
 
+  <!--
+    A signature produced by Node, committed so the Linux leg can prove the host
+    accepts what the publisher CLI actually emits.
+  -->
+  <ItemGroup>
+    <None Include="fixtures\**" CopyToOutputDirectory="PreserveNewest" LinkBase="fixtures" />
+  </ItemGroup>
+
   <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />

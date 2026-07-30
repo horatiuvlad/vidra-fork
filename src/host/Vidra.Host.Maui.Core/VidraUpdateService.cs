@@ -110,9 +110,18 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
             AppFingerprint = BridgeContractRegistry.Fingerprint(BridgeManifestScope.App),
             EmbeddedVersion = EmbeddedVersion(),
             Channel = options.Channel ?? Environment.GetEnvironmentVariable(VidraUpdateOptions.ChannelEnvironmentVariable),
+            TrustedPublicKeys = [.. options.PublicKeys],
         };
 
         Log($"checking {source.Description} (core={Short(request.CoreFingerprint)} app={Short(request.AppFingerprint)})");
+
+        if (request.TrustedPublicKeys.Count == 0)
+        {
+            // Said once per check, and deliberately blunt. An unsigned feed is a
+            // reasonable choice for a private or local one and a serious mistake
+            // for a public one, and the difference is not visible from here.
+            Log("the feed is unsigned — anyone who can write to it can run code in this app");
+        }
 
         var result = await new UpdateClient(_store).CheckAsync(source, request, ct).ConfigureAwait(false);
 
@@ -240,6 +249,17 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
                 && channel.ValueKind == JsonValueKind.String)
             {
                 options.Channel = channel.GetString();
+            }
+
+            if (options.PublicKeys.Count == 0
+                && root.TryGetProperty("publicKeys", out var keys)
+                && keys.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var key in keys.EnumerateArray())
+                {
+                    if (key.ValueKind == JsonValueKind.String && key.GetString() is { Length: > 0 } value)
+                        options.PublicKeys.Add(value);
+                }
             }
 
             if (root.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.False)

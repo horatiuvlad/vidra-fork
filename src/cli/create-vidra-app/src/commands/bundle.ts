@@ -5,7 +5,15 @@ import { execSync } from "node:child_process";
 import { parseArgs } from "../utils.js";
 import { detectProject, type ProjectInfo } from "../project.js";
 import { createZip, readDirectoryEntries } from "../zip.js";
+import { readUpdateConfig } from "../update-config.js";
 import {
+  publicKeyFor,
+  resolveSigningKey,
+  signManifest,
+  writeSignature,
+} from "../manifest-signing.js";
+import {
+  amber,
   dim,
   footer,
   header,
@@ -47,6 +55,8 @@ export interface BundleOptions {
   out: string;
   channel?: string;
   skipBuild: boolean;
+  /** Path to the signing key; the environment is consulted when absent. */
+  sign?: string;
 }
 
 /**
@@ -62,6 +72,7 @@ export const parseBundleOptions = (argv: string[]): BundleOptions => {
     out: typeof args.out === "string" ? args.out : "dist",
     channel: typeof args.channel === "string" ? args.channel : undefined,
     skipBuild: !!args["skip-build"],
+    sign: typeof args.sign === "string" ? args.sign : undefined,
   };
 };
 
@@ -121,7 +132,8 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
 
   const manifestPath = path.join(outDir, "bundles.json");
   const manifest = mergeManifest(readManifest(manifestPath), entry);
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(manifestPath, manifestBytes);
 
   console.log(
     row({
@@ -131,6 +143,8 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
       detail: `${value("bundles.json")} ${dim(`(${manifest.bundles.length} entries)`)}`,
     }),
   );
+
+  stepSignManifest(project, outDir, manifestBytes, options.sign);
   console.log(
     row({
       glyph: "plan",
@@ -147,6 +161,83 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
           `every file, and bundles.json last`,
       ),
     ),
+  );
+};
+
+/**
+ * Signs the manifest, or explains why the feed will be rejected.
+ *
+ * The loud case is the mismatch: an app configured with public keys will refuse
+ * an unsigned feed, so publishing one without a key produces a feed that looks
+ * fine and silently reaches nobody. That has to be an error at publish time, not
+ * a mystery later.
+ */
+const stepSignManifest = (
+  project: ProjectInfo,
+  outDir: string,
+  manifestBytes: Buffer,
+  keyPath?: string,
+): void => {
+  const configuredKeys = readUpdateConfig(project.root)?.publicKeys ?? [];
+
+  let privateKeyPem: string | null = null;
+  try {
+    privateKeyPem = resolveSigningKey(keyPath);
+  } catch (error) {
+    fail("sign feed", (error as Error).message);
+  }
+
+  if (!privateKeyPem) {
+    if (configuredKeys.length > 0) {
+      fail(
+        "sign feed",
+        "this app trusts a signing key, so an unsigned feed would be refused by every " +
+          "installed copy — pass --sign <key.pem> or set VIDRA_UPDATE_SIGNING_KEY",
+      );
+    }
+
+    fs.removeSync(path.join(outDir, "bundles.json.sig"));
+    console.log(
+      row({
+        glyph: "manual",
+        label: "sign feed",
+        labelWidth: LABEL_WIDTH,
+        detail: amber(
+          "unsigned — anyone who can write to your feed host can run code in your app",
+        ),
+      }),
+    );
+    return;
+  }
+
+  let document;
+  let publicKey;
+  try {
+    document = signManifest(manifestBytes, privateKeyPem);
+    publicKey = publicKeyFor(privateKeyPem).publicKey;
+  } catch (error) {
+    return fail("sign feed", (error as Error).message);
+  }
+
+  writeSignature(outDir, document);
+
+  // Signing with a key the app does not trust produces a feed nobody can
+  // install from, which is worth catching here rather than in a support thread.
+  if (configuredKeys.length > 0 && !configuredKeys.includes(publicKey)) {
+    fail(
+      "sign feed",
+      `signed with key ${document.keyId}, which is not among the ${configuredKeys.length} ` +
+        "key(s) in package.json — installed apps would reject this feed",
+    );
+  }
+
+  console.log(
+    row({
+      glyph: "done",
+      label: "sign feed",
+      labelWidth: LABEL_WIDTH,
+      detail: `${value("bundles.json.sig")} ${dim(`(key ${document.keyId})`)}`,
+    }),
   );
 };
 

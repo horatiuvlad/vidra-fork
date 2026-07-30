@@ -14,3 +14,7 @@ node_modules/
 .vs/
 .vscode/
 *.user
+
+# Update signing keys — whoever holds one can run code in every installed copy
+*-signing-key.pem
+vidra-signing-key.pem

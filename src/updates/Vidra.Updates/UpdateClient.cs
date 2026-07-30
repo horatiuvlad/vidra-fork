@@ -45,6 +45,19 @@ public sealed class UpdateClient(BundleStore store, BundleInstaller? installer =
         {
             var state = _store.LoadState();
             var json = await source.GetManifestAsync(ct).ConfigureAwait(false);
+
+            // Verified before the document is even parsed: everything downstream
+            // — which bundle to fetch, which hash to trust — comes out of these
+            // bytes, so believing any of it before knowing who wrote them would
+            // be backwards.
+            var signature = request.TrustedPublicKeys.Count > 0
+                ? await source.GetManifestSignatureAsync(ct).ConfigureAwait(false)
+                : null;
+            ManifestVerifier.Verify(
+                System.Text.Encoding.UTF8.GetBytes(json),
+                signature,
+                request.TrustedPublicKeys);
+
             var manifest = BundleManifest.Parse(json);
 
             var installedVersion = state.CurrentVersion ?? request.EmbeddedVersion;
@@ -156,4 +169,11 @@ public sealed record UpdateCheckRequest
     public string? EmbeddedVersion { get; init; }
 
     public string? Channel { get; init; }
+
+    /// <summary>
+    /// Base64 SPKI public keys this app will accept a manifest from. Empty means
+    /// the feed is trusted without a signature — appropriate for a local
+    /// directory or a private feed, and not for anything public.
+    /// </summary>
+    public IReadOnlyList<string> TrustedPublicKeys { get; init; } = [];
 }

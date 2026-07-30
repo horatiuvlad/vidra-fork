@@ -20,6 +20,17 @@ public interface IBundleSource
     Task<string> GetManifestAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// Fetches the detached signature (<c>bundles.json.sig</c>), or
+    /// <see langword="null"/> when the feed has none.
+    /// </summary>
+    /// <remarks>
+    /// A missing signature is a normal answer, not an error — an unsigned feed is
+    /// allowed. Whether that is acceptable is the caller's decision, made against
+    /// the keys the app was built with.
+    /// </remarks>
+    Task<string?> GetManifestSignatureAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// Opens a bundle archive for reading. <paramref name="url"/> is the entry's
     /// <c>url</c>, which may be relative to the manifest.
     /// </summary>

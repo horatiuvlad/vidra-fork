@@ -87,17 +87,82 @@ fingerprints so you can see when they move.
 State lives in `<app data>/vidra/bundles/`, one directory per bundle plus a
 `state.json`. Bundles that nothing references are pruned.
 
-## Security
+## Signing the feed
 
-The `sha256` in the feed is mandatory and verified before an archive is
-unpacked; archives that try to write outside their own directory are refused
-outright. That protects against a corrupted or truncated download.
+Two different questions, and you want both answered:
 
-It does **not** protect against a compromised feed host, which could publish a
-valid archive with a matching hash. No store review sits between your CDN and
-code execution on your users' machines. **Manifest signing (ed25519, public key
-baked into the app) is not implemented yet** — treat OTA as suitable for feeds
-you control tightly until it is.
+| Question | Answered by |
+|---|---|
+| did this archive arrive intact? | the `sha256` on each entry |
+| did *I* publish this index? | the signature over `bundles.json` |
+
+Only the second one protects you from your own feed host. A host that can serve
+a manifest can serve a matching archive too, and there is no store review between
+your CDN and code running on your users' machines. **Sign the feed before it is
+public.**
+
+```bash
+npx vidra keygen                  # writes vidra-signing-key.pem (+ .pub)
+```
+
+Add the public half to your app's `package.json` and rebuild:
+
+```json
+{
+  "vidra": {
+    "update": {
+      "feedUrl": "https://updates.example.com/bundles.json",
+      "publicKeys": ["MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE..."]
+    }
+  }
+}
+```
+
+Then publish signed:
+
+```bash
+npx vidra bundle --sign vidra-signing-key.pem
+# or, in CI:  VIDRA_UPDATE_SIGNING_KEY="$(cat key.pem)" npx vidra bundle
+```
+
+That writes `bundles.json.sig` next to the manifest — upload both.
+
+**Configuring any key makes signatures mandatory.** An app that trusts a key
+refuses an unsigned feed, a feed signed by another key, and a manifest edited
+after signing. That is the point: dropping the signature file is exactly what
+someone who cannot forge one would try. An app with **no** keys configured
+accepts an unsigned feed and says so in its log on every check.
+
+`vidra bundle` refuses to publish unsigned when your `package.json` trusts a key,
+and refuses to publish signed by a key your app does not trust — either would
+produce a feed that looks fine and reaches nobody.
+
+### Rotating a key
+
+`publicKeys` is a list. Add the new key alongside the old one and ship a release;
+once installed apps have it, start signing with the new key; drop the old one a
+release later. Skipping the overlap strands everyone who has not updated the
+binary.
+
+### Keeping the key
+
+Whoever holds `vidra-signing-key.pem` can run code on every machine your app is
+installed on. Never commit it; back it up somewhere you would back up a
+production credential; in CI pass it as a secret in `VIDRA_UPDATE_SIGNING_KEY`.
+Losing it means shipping a new binary with a new key before you can publish
+again.
+
+### Algorithm
+
+ECDSA P-256 with SHA-256, DER-encoded, over the exact bytes of `bundles.json`.
+The signature is detached (`bundles.json.sig`) rather than embedded, so neither
+side has to agree on a canonical JSON serialization — a disagreement there is a
+signature that silently stops verifying.
+
+Not ed25519, which the design originally called for: .NET's built-in Ed25519 is
+approved but not shipping until .NET 11 (`dotnet/runtime#63174`), and the
+alternative was a crypto dependency inside every Vidra app whether or not it uses
+updates. Node and .NET both do P-256 natively.
 
 ## Testing a feed locally
 
@@ -118,6 +183,7 @@ easiest way to point a build at staging without rebuilding it.
 | `VIDRA_UPDATE_FEED_URL` | Overrides the feed URL (or a local directory path) |
 | `VIDRA_UPDATE_CHANNEL` | Overrides the channel |
 | `VIDRA_ASSET_ROOT` | Serves the WebView from a directory, bypassing updates entirely |
+| `VIDRA_UPDATE_SIGNING_KEY` | The signing key PEM, for `vidra bundle` in CI |
 
 `vidra dev` never checks for updates — it serves the Vite dev server.
 
@@ -126,6 +192,5 @@ easiest way to point a build at staging without rebuilding it.
 - A bundle counts as "booted" once its JavaScript has run far enough to
   construct the Vidra client. An app whose own code throws *after* that still
   counts as booted and will not roll back.
-- The feed is not signed (above).
 - No delta bundles, no staged rollouts, no in-app update UI. The version that is
   running is available to native code through `IVidraUpdates`.

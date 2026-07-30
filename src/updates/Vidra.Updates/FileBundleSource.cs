@@ -35,6 +35,13 @@ public sealed class FileBundleSource : IBundleSource
         return File.ReadAllTextAsync(_manifestPath, ct);
     }
 
+    public Task<string?> GetManifestSignatureAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var path = _manifestPath + ".sig";
+        return Task.FromResult(File.Exists(path) ? File.ReadAllText(path) : null);
+    }
+
     public Task<Stream> OpenBundleAsync(string url, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
