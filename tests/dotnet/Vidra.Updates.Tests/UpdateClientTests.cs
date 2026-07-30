@@ -73,7 +73,9 @@ public sealed class UpdateClientTests : IDisposable
         var result = await new UpdateClient(store).CheckAsync(new FileBundleSource(feed), Request());
 
         result.Outcome.Should().Be(UpdateCheckOutcome.Failed);
-        result.Reason.Should().Contain("verification");
+        // The appended byte can trip either guard — the mid-copy size cap or the
+        // hash check — depending on where the stream ends. Both are refusals.
+        result.Reason.Should().MatchRegex("verification|exceeds its declared size");
         store.LoadState().Pending.Should().BeNull();
     }
 

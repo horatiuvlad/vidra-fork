@@ -128,8 +128,10 @@ public sealed class BundleInstallerTests : IDisposable
         // keeps going past it is lying — and stopping mid-copy is what prevents
         // a hostile feed from filling the disk before the hash check runs.
         var feed = Feed();
-        var entry = Publish(feed, "1.1.0", ("index.html", new string('x', 50_000)));
-        var undersold = entry with { Size = 1_000 };
+        var entry = Publish(feed, "1.1.0", ("index.html", "<h1>real content</h1>"));
+        // Declare less than the archive actually is: the stream keeps going past
+        // its promised size, which is the disk-filling shape.
+        var undersold = entry with { Size = entry.Size / 2 };
         var store = Store();
 
         var install = async () => await new BundleInstaller(store)
