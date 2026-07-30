@@ -160,6 +160,7 @@ Full pipeline and C# → TS type mapping: **[Type safety & codegen →](docs/arc
 | [Architecture](docs/architecture.md) | Host model, bridge design, and the codegen pipeline |
 | [Interop Protocol](docs/interop-protocol.md) | JSON envelopes, transports, and error codes |
 | [Capabilities](docs/capabilities.md) | Every built-in module and its typed methods |
+| [Updates](docs/updates.md) | Over-the-air web-bundle updates: publishing, compatibility, rollback |
 | [Testing](docs/testing.md) | How the bridge and codegen output are tested |
 
 ## Packages
@@ -168,6 +169,7 @@ Full pipeline and C# → TS type mapping: **[Type safety & codegen →](docs/arc
 |---------|-------------|
 | [`create-vidra-app`](https://www.npmjs.com/package/create-vidra-app) | Scaffolder + the `vidra` CLI (dev / run / build / doctor) |
 | [`@vidra-dev/sdk`](https://www.npmjs.com/package/@vidra-dev/sdk) | Framework-agnostic runtime plus generated native/event proxies |
+| `Vidra.Updates` | Over-the-air web-bundle updates (used by `Vidra.Hosting.Maui`) |
 
 ## Targets
 

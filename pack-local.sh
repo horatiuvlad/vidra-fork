@@ -14,6 +14,9 @@ dotnet pack "$SCRIPT_DIR/src/bridge/Vidra.Bridge/Vidra.Bridge.csproj" \
 dotnet pack "$SCRIPT_DIR/src/bridge/Vidra.Bridge/Vidra.Bridge.csproj" \
   -c Release -o "$OUT_DIR"
 
+dotnet pack "$SCRIPT_DIR/src/updates/Vidra.Updates/Vidra.Updates.csproj" \
+  -c Release -o "$OUT_DIR"
+
 dotnet pack "$SCRIPT_DIR/src/modules/Vidra.Modules.FileSystem/Vidra.Modules.FileSystem.csproj" \
   -c Release -o "$OUT_DIR"
 

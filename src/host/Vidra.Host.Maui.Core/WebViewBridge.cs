@@ -84,6 +84,26 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
         await PushToJsAsync($"window.__vidra_callback({response})");
     }
 
+    /// <summary>
+    /// Raised once per process when the loaded web bundle has proved it runs.
+    /// </summary>
+    /// <remarks>
+    /// This is what clears an updated bundle's probation, so it has to mean
+    /// something a broken bundle cannot fake. It fires when the page has
+    /// installed <c>window.__vidra_initialize</c> — the SDK does that while
+    /// constructing its client, so the bundle's JavaScript has parsed and
+    /// executed and the bridge exists on both sides.
+    ///
+    /// What it does not prove is that the app rendered anything. A bundle whose
+    /// own code throws after the SDK is up still counts as booted here, and would
+    /// not be rolled back. Closing that gap needs the JS side to say so
+    /// explicitly, which is a bridge contract change and deliberately not in the
+    /// first version.
+    /// </remarks>
+    public event Action? BundleBooted;
+
+    private bool _bundleBootAnnounced;
+
     private async void OnNavigated(object? sender, WebNavigatedEventArgs e)
     {
         await PushToJsAsync("window.__vidra_native = true");
@@ -104,6 +124,46 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             // in JavaScript; keep the native UI thread alive so it remains visible.
             System.Diagnostics.Debug.WriteLine(
                 $"[Vidra] Bridge protocol initialization failed: {ex.Message}");
+        }
+
+        if (BundleBooted is not null)
+            _ = WatchBundleBootAsync();
+    }
+
+    /// <summary>
+    /// Polls for the SDK's presence rather than assuming it is there when
+    /// navigation completes: the document is "navigated" before its scripts have
+    /// run, so a single check would report every bundle broken.
+    /// </summary>
+    private async Task WatchBundleBootAsync()
+    {
+        const int attempts = 40;
+
+        for (var attempt = 0; attempt < attempts && !_bundleBootAnnounced; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+
+            string? answer;
+            try
+            {
+                answer = await MainThread.InvokeOnMainThreadAsync(
+                    () => _webView?.EvaluateJavaScriptAsync(
+                        "String(typeof window.__vidra_initialize === 'function')")
+                        ?? Task.FromResult<string>(null!));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Vidra] boot probe failed: {ex.Message}");
+                continue;
+            }
+
+            // Platforms disagree about whether a JS string comes back quoted.
+            if (answer?.Trim().Trim('"') != "true")
+                continue;
+
+            _bundleBootAnnounced = true;
+            BundleBooted?.Invoke();
+            return;
         }
     }
 
