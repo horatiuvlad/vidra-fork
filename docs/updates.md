@@ -256,6 +256,15 @@ easiest way to point a build at staging without rebuilding it.
 
 `vidra dev` never checks for updates — it serves the Vite dev server.
 
+## Upgrading an existing Windows app
+
+On Windows the web assets are served from `https://vidra.invalid/` rather than
+MAUI's default `https://appdir/`, so that an updated bundle keeps the same origin
+as the one it replaces. Origin-scoped storage — `localStorage`, IndexedDB,
+cookies, caches — is **reset once** when an existing app upgrades to this version
+of Vidra, and is stable from then on. Apps that store nothing in the WebView are
+unaffected. macOS is unchanged.
+
 ## Limits worth knowing
 
 - A bundle counts as "booted" once its JavaScript has run far enough to
