@@ -7,6 +7,19 @@ OUT_DIR="$SCRIPT_DIR/dist/packages"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+# Evict our own packages from the global cache first.
+#
+# A scaffolded app pins an exact version, and NuGet will not re-extract a package
+# it already has under that version — so a freshly packed 0.4.0 is silently
+# ignored in favour of whatever 0.4.0 landed there earlier. On a CI runner with a
+# restored cache, or on a developer machine that packed yesterday, that means
+# building against stale code while every log line says the build succeeded.
+NUGET_CACHE="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
+if [ -d "$NUGET_CACHE" ]; then
+  rm -rf "$NUGET_CACHE"/vidra.* 2>/dev/null || true
+  echo "Evicted stale vidra.* packages from $NUGET_CACHE"
+fi
+
 echo "Packing Vidra packages to $OUT_DIR ..."
 
 dotnet pack "$SCRIPT_DIR/src/bridge/Vidra.Bridge/Vidra.Bridge.csproj" \
