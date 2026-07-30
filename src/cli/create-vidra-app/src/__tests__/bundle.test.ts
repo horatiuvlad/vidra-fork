@@ -1,15 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createZip, readDirectoryEntries, crc32 } from "../zip.js";
 import {
+  loadBaseManifest,
   mergeManifest,
   parseBundleOptions,
   readManifest,
   type BundleManifest,
 } from "../commands/bundle.js";
+import { generateKeyPair, signManifest } from "../manifest-signing.js";
 import { readUpdateConfig, stampUpdateConfig, UPDATE_CONFIG_FILE } from "../update-config.js";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "vidra-bundle-"));
@@ -97,7 +99,18 @@ describe("bundle options", () => {
   });
 
   it("defaults to dist/ and a real build", () => {
-    expect(parseBundleOptions([])).toEqual({ out: "dist", channel: undefined, skipBuild: false });
+    expect(parseBundleOptions([])).toEqual({
+      out: "dist",
+      channel: undefined,
+      skipBuild: false,
+      sign: undefined,
+      mergeFrom: undefined,
+    });
+  });
+
+  it("reads --merge-from and --sign", () => {
+    expect(parseBundleOptions(["--merge-from", "https://e.com/bundles.json", "--sign", "k.pem"]))
+      .toMatchObject({ mergeFrom: "https://e.com/bundles.json", sign: "k.pem" });
   });
 });
 
@@ -236,5 +249,103 @@ describe("vidra.update config", () => {
     stampUpdateConfig(hostDir, null);
 
     expect(fs.existsSync(path.join(hostDir, "Resources", "Raw", UPDATE_CONFIG_FILE))).toBe(false);
+  });
+});
+
+describe("merging into a feed that already exists", () => {
+  const existing = {
+    schema: 1,
+    bundles: [
+      {
+        version: "1.0.0",
+        url: "bundle-1.0.0.zip",
+        sha256: "aaa",
+        size: 10,
+        // An app built against this older contract can install nothing else, so
+        // dropping this entry strands it.
+        coreFingerprint: "old-core",
+        appFingerprint: "old-app",
+      },
+    ],
+  };
+
+  const feedDir = (contents?: unknown): string => {
+    const dir = tmp();
+    if (contents) fs.writeFileSync(path.join(dir, "bundles.json"), JSON.stringify(contents, null, 2));
+    return dir;
+  };
+
+  it("keeps the entries already published", async () => {
+    const base = await loadBaseManifest(
+      { out: "dist", skipBuild: true, mergeFrom: feedDir(existing) },
+      tmp(),
+      null,
+    );
+
+    expect(base.bundles.map((b) => b.version)).toEqual(["1.0.0"]);
+  });
+
+  it("starts empty when the feed does not exist yet", async () => {
+    const base = await loadBaseManifest(
+      { out: "dist", skipBuild: true, mergeFrom: path.join(tmp(), "nothing-here") },
+      tmp(),
+      null,
+    );
+
+    expect(base.bundles).toEqual([]);
+  });
+
+  it("falls back to the out directory when no source is given", async () => {
+    const out = tmp();
+    fs.writeFileSync(path.join(out, "bundles.json"), JSON.stringify(existing));
+
+    const base = await loadBaseManifest({ out, skipBuild: true }, out, null);
+
+    expect(base.bundles).toHaveLength(1);
+  });
+
+  it("refuses to re-sign an index its own key did not sign", async () => {
+    // Otherwise: an attacker injects entries into your feed, your next publish
+    // merges them, signs them, and every installed app trusts them.
+    const { privateKeyPem } = generateKeyPair();
+    const attacker = generateKeyPair();
+    const dir = feedDir(existing);
+    fs.writeFileSync(
+      path.join(dir, "bundles.json.sig"),
+      JSON.stringify(
+        signManifest(fs.readFileSync(path.join(dir, "bundles.json")), attacker.privateKeyPem),
+      ),
+    );
+
+    const exit = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("exited");
+    }) as never);
+
+    try {
+      await expect(
+        loadBaseManifest({ out: "dist", skipBuild: true, mergeFrom: dir }, tmp(), privateKeyPem),
+      ).rejects.toThrow("exited");
+    } finally {
+      exit.mockRestore();
+    }
+  });
+
+  it("merges an index signed by its own key", async () => {
+    const { privateKeyPem } = generateKeyPair();
+    const dir = feedDir(existing);
+    fs.writeFileSync(
+      path.join(dir, "bundles.json.sig"),
+      JSON.stringify(
+        signManifest(fs.readFileSync(path.join(dir, "bundles.json")), privateKeyPem),
+      ),
+    );
+
+    const base = await loadBaseManifest(
+      { out: "dist", skipBuild: true, mergeFrom: dir },
+      tmp(),
+      privateKeyPem,
+    );
+
+    expect(base.bundles).toHaveLength(1);
   });
 });

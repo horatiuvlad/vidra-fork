@@ -10,6 +10,7 @@ import {
   publicKeyFor,
   resolveSigningKey,
   signManifest,
+  verifyManifest,
   writeSignature,
 } from "../manifest-signing.js";
 import {
@@ -57,6 +58,12 @@ export interface BundleOptions {
   skipBuild: boolean;
   /** Path to the signing key; the environment is consulted when absent. */
   sign?: string;
+  /**
+   * Where the index being added to lives — a URL or a directory. Without it the
+   * out-dir's own `bundles.json` is the base, which on a clean checkout is
+   * nothing at all.
+   */
+  mergeFrom?: string;
 }
 
 /**
@@ -73,6 +80,7 @@ export const parseBundleOptions = (argv: string[]): BundleOptions => {
     channel: typeof args.channel === "string" ? args.channel : undefined,
     skipBuild: !!args["skip-build"],
     sign: typeof args.sign === "string" ? args.sign : undefined,
+    mergeFrom: typeof args["merge-from"] === "string" ? args["merge-from"] : undefined,
   };
 };
 
@@ -131,7 +139,8 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
   };
 
   const manifestPath = path.join(outDir, "bundles.json");
-  const manifest = mergeManifest(readManifest(manifestPath), entry);
+  const base = await loadBaseManifest(options, outDir, signingKeyFor(options));
+  const manifest = mergeManifest(base, entry);
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   fs.writeFileSync(manifestPath, manifestBytes);
 
@@ -162,6 +171,125 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
       ),
     ),
   );
+};
+
+/**
+ * Reads the index this publish is adding to.
+ *
+ * Without `--merge-from` that is whatever `bundles.json` happens to be in the
+ * out directory — fine locally, and silently wrong in CI, where a clean checkout
+ * has none and the published index ends up containing only the newest entry.
+ * That is not merely untidy: an app built against an older core contract can only
+ * install a bundle whose fingerprints match it, so dropping older entries
+ * strands exactly those users.
+ */
+export const loadBaseManifest = async (
+  options: BundleOptions,
+  outDir: string,
+  privateKeyPem: string | null,
+): Promise<BundleManifest> => {
+  if (!options.mergeFrom) {
+    return readManifest(path.join(outDir, "bundles.json"));
+  }
+
+  let fetched: { manifest: string; signature: string | null } | null;
+  try {
+    fetched = await fetchFeed(options.mergeFrom);
+  } catch (error) {
+    // Never fall back to "start empty" on a failed fetch. A network blip would
+    // otherwise publish an index that quietly drops every existing entry.
+    return fail("merge feed", `could not read ${options.mergeFrom}: ${(error as Error).message}`);
+  }
+
+  if (!fetched) {
+    console.log(
+      row({
+        glyph: "plan",
+        label: "merge feed",
+        labelWidth: LABEL_WIDTH,
+        detail: dim(`no index at ${options.mergeFrom} yet — publishing the first one`),
+      }),
+    );
+    return { schema: SCHEMA, bundles: [] };
+  }
+
+  // Signing what you just downloaded is how an attacker gets their entries into
+  // your feed under your key: they inject, you merge, you sign, every app
+  // installs it. So a signed publisher only merges an index its own key signed.
+  if (privateKeyPem) {
+    const { publicKey } = publicKeyFor(privateKeyPem);
+    const ok =
+      fetched.signature !== null &&
+      verifyManifest(Buffer.from(fetched.manifest), safeParse(fetched.signature), publicKey);
+
+    if (!ok) {
+      fail(
+        "merge feed",
+        `the index at ${options.mergeFrom} is not signed by your key — refusing to merge and ` +
+          "re-sign it, which would publish someone else's entries under your signature",
+      );
+    }
+  }
+
+  const base = parseManifest(fetched.manifest);
+  console.log(
+    row({
+      glyph: "done",
+      label: "merge feed",
+      labelWidth: LABEL_WIDTH,
+      detail: `${value(options.mergeFrom)} ${dim(`(${base.bundles.length} existing entries)`)}`,
+    }),
+  );
+  return base;
+};
+
+/** Returns null when there is simply no index there yet — the first publish. */
+const fetchFeed = async (
+  source: string,
+): Promise<{ manifest: string; signature: string | null } | null> => {
+  if (/^https?:\/\//i.test(source)) {
+    const response = await fetch(source);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const manifest = await response.text();
+    const signatureResponse = await fetch(`${source}.sig`);
+    return {
+      manifest,
+      signature: signatureResponse.ok ? await signatureResponse.text() : null,
+    };
+  }
+
+  const manifestPath = fs.existsSync(source) && fs.statSync(source).isDirectory()
+    ? path.join(source, "bundles.json")
+    : source;
+
+  if (!fs.existsSync(manifestPath)) return null;
+
+  const signaturePath = `${manifestPath}.sig`;
+  return {
+    manifest: fs.readFileSync(manifestPath, "utf8"),
+    signature: fs.existsSync(signaturePath) ? fs.readFileSync(signaturePath, "utf8") : null,
+  };
+};
+
+const safeParse = (text: string): { algorithm: string; keyId: string; signature: string } => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { algorithm: "", keyId: "", signature: "" };
+  }
+};
+
+/** The key this publish will sign with, or null when it will not sign. */
+const signingKeyFor = (options: BundleOptions): string | null => {
+  try {
+    return resolveSigningKey(options.sign);
+  } catch {
+    // A bad --sign path is reported by the signing step, which runs later and
+    // owns that message.
+    return null;
+  }
 };
 
 /**
@@ -317,9 +445,12 @@ const readFingerprintFile = (file: string): string | null => {
 
 export const readManifest = (file: string): BundleManifest => {
   if (!fs.existsSync(file)) return { schema: SCHEMA, bundles: [] };
+  return parseManifest(fs.readFileSync(file, "utf8"));
+};
 
+export const parseManifest = (text: string): BundleManifest => {
   try {
-    const parsed = fs.readJsonSync(file) as Partial<BundleManifest>;
+    const parsed = JSON.parse(text) as Partial<BundleManifest>;
     if (parsed.schema !== SCHEMA || !Array.isArray(parsed.bundles)) {
       return { schema: SCHEMA, bundles: [] };
     }

@@ -36,6 +36,7 @@ ${ex("build --target macos", "build & package a macOS DMG")}
 ${ex("bundle", "pack an OTA bundle into dist/")}
 ${ex("bundle --channel beta", "publish it on the beta channel")}
 ${ex("bundle --sign key.pem", "publish a signed feed")}
+${ex("bundle --merge-from URL", "add to the feed you already publish")}
 ${ex("keygen", "create an update signing key")}
 ${ex("verify", "check the newest artifact in dist/")}
 ${ex("doctor", "verify .NET SDK + MAUI workload")}
