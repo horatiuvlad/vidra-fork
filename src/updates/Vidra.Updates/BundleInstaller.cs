@@ -74,15 +74,42 @@ public sealed class BundleInstaller(BundleStore store)
         }
     }
 
+    /// <summary>
+    /// Absolute ceiling on an archive when the manifest does not declare a size.
+    /// A web bundle is megabytes; anything near this is not one.
+    /// </summary>
+    internal const long MaxBundleBytes = 512L * 1024 * 1024;
+
     private static async Task DownloadAsync(
         IBundleSource source,
         BundleEntry entry,
         string archivePath,
         CancellationToken ct)
     {
+        // Bounded during the copy, not checked after: the hash and size are
+        // verified once the file is on disk, but by then a hostile feed has
+        // already written as much as it wanted. The limit is the manifest's own
+        // declared size — which the signature covers — with a hard ceiling when
+        // none is declared.
+        var limit = entry.Size > 0 ? entry.Size : MaxBundleBytes;
+
         await using var remote = await source.OpenBundleAsync(entry.Url, ct).ConfigureAwait(false);
         await using var file = File.Create(archivePath);
-        await remote.CopyToAsync(file, ct).ConfigureAwait(false);
+
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await remote.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+        {
+            total += read;
+            if (total > limit)
+            {
+                throw new BundleVerificationException(
+                    $"bundle {entry.Version} exceeds its declared size ({limit} bytes); stopping the download");
+            }
+
+            await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+        }
     }
 
     private static void VerifyHash(string archivePath, BundleEntry entry)
