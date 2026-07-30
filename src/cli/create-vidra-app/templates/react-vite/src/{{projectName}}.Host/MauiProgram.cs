@@ -9,6 +9,14 @@ public static class MauiProgram
     {
         var builder = MauiApp.CreateBuilder();
 
+        // Over-the-air updates for the web bundle are opt-in: add
+        // `.UseVidraUpdates()` below, and a `vidra.update` block to package.json
+        //
+        //   "vidra": { "update": { "feedUrl": "https://example.com/bundles.json" } }
+        //
+        // then publish with `npx vidra bundle`. Native code still ships the usual
+        // way — a bundle only installs when its contract fingerprints match this
+        // build, so JS can never call a bridge the installed binary lacks.
         builder
             .UseMauiApp<App>()
             .UseVidra()

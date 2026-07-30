@@ -260,6 +260,13 @@ are reported by `npx vidra doctor`.
 
 ---
 
+## Updating the web bundle without a release
+
+Shipping a new `ui/` build to installed apps does not need any of the above — no
+signing, no notarization, no installer. See [Updates](updates.md). Native changes
+still go through the flow on this page, and the contract fingerprints make sure a
+web bundle can never get ahead of the binary that has to serve it.
+
 ## Releasing Vidra itself
 
 Vidra's own packages are published by two manual workflows, both **dry-run by

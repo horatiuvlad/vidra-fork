@@ -1,7 +1,7 @@
 {
   "name": "@vidra-dev/sdk",
   "version": "0.4.0",
-  "description": "Framework-agnostic TypeScript SDK for Vidra bridge (JS ↔ .NET MAUI)",
+  "description": "Framework-agnostic TypeScript SDK for Vidra bridge (JS \u2194 .NET MAUI)",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -10,7 +10,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/emit-manifest.mjs",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",

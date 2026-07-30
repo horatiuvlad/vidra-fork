@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import { parseArgs } from "../utils.js";
 import { formatBuildError, formatProcessError } from "../exec.js";
 import { resolveAppVersion, versionPublishArgs } from "../version.js";
+import { readUpdateConfig, stampUpdateConfig, UPDATE_CONFIG_FILE } from "../update-config.js";
 import {
   detectPlatform,
   detectProject,
@@ -108,6 +109,7 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
 
   stepBuildUi(project, verbose);
   stepCopyAssets(project);
+  stepStampUpdateConfig(project);
   const publishDir = stepDotnetPublish(project, target, verbose);
 
   const bundlePath = target.findBundle(publishDir, project.projectName);
@@ -430,6 +432,33 @@ const stepCopyAssets = (project: ProjectInfo): void => {
       label: "copy assets",
       labelWidth: LABEL_WIDTH,
       detail: `${dim("\u2192")} ${value("Resources/Raw/wwwroot")} ${dim(`(${fileCount} files)`)}`,
+    }),
+  );
+};
+
+/**
+ * Stamps the app's `vidra.update` config into the bundle, so the host can read a
+ * feed URL at startup without the developer writing any C#. Runs after the asset
+ * copy because it writes into the same `Resources/Raw` directory.
+ */
+const stepStampUpdateConfig = (project: ProjectInfo): void => {
+  const config = readUpdateConfig(project.root);
+  stampUpdateConfig(project.hostDir, config);
+
+  if (!config) {
+    // Silent when there is nothing to say: most apps do not use OTA updates, and
+    // a build log should not imply a feature is missing.
+    return;
+  }
+
+  console.log(
+    row({
+      glyph: "done",
+      label: "stamp updates",
+      labelWidth: LABEL_WIDTH,
+      detail: `${dim("\u2192")} ${value(`Resources/Raw/${UPDATE_CONFIG_FILE}`)} ${dim(
+        config.enabled === false ? "(disabled)" : `(${config.feedUrl ?? "no feed"})`,
+      )}`,
     }),
   );
 };
