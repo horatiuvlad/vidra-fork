@@ -59,6 +59,14 @@ public sealed partial class WebViewBridge
     /// resetting localStorage, IndexedDB, caches and cookies every time an update
     /// is promoted or rolled back. One fixed host keeps the app's stored data
     /// across bundle swaps.
+    ///
+    /// Reusing MAUI's own <c>appdir</c> host was tried, and does not work: the
+    /// handler re-points that mapping at the application directory, so
+    /// <c>https://appdir/index.html</c> 404s and the page never loads. Measured
+    /// on Windows CI — the bundle promoted, served nothing, failed to boot twice
+    /// and rolled back. So the cost of a separate host is accepted: upgrading to
+    /// this version moves an app off MAUI's origin once, resetting
+    /// origin-scoped storage, and it is stable from then on.
     /// </remarks>
     private const string VirtualHostName = "vidra.invalid";
 
