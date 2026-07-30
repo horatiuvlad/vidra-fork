@@ -40,16 +40,85 @@ that still lets an already-downloaded bundle finish promoting).
 
 ```bash
 npm version patch          # bundles are ordered by your app's version
-npx vidra bundle           # builds ui/, writes dist/bundle-<version>-<hash>.zip + dist/bundles.json
+npx vidra bundle --merge-from https://updates.example.com/bundles.json
 ```
 
-Then upload everything in `dist/` to your host — **`bundles.json` last**, so no
-client ever reads an index that points at an archive you have not finished
-uploading. Any static host works: S3, Blob, B2, a CDN, nginx, a file share. The
-index is yours, so there is nothing to adapt per provider.
+That builds `ui/`, writes `dist/bundle-<version>-<hash>.zip`, and produces a
+`dist/bundles.json` containing your new entry **plus everything already
+published**. Then upload — see the recipes below.
 
 `vidra bundle` writes both **contract fingerprints** into each entry, read from
 generated files rather than configured. That matters — see below.
+
+### Always merge into the live index
+
+`--merge-from` fetches the index you are actually serving and adds to it. Without
+it, the base is whatever `dist/bundles.json` happens to be on disk — which on a
+clean CI checkout is nothing, so you would publish an index containing only the
+newest entry.
+
+That is not just untidy. A bundle is only installable by an app whose contract
+fingerprints match it, so if you have ever shipped a native release that changed
+a contract, older entries are the only thing older installs can use. Dropping
+them strands exactly those users, silently, with a feed that looks perfectly
+healthy.
+
+If the index is not there yet, `--merge-from` says so and publishes the first
+one. If it cannot be fetched, the publish **fails** rather than starting empty.
+
+When you sign, `vidra bundle` also verifies that the index it is merging was
+signed by your key, and refuses otherwise — merging a feed someone else has
+written to and then signing the result would publish their entries under your
+signature.
+
+### Uploading
+
+Two rules, whatever the host:
+
+1. **Archives first, `bundles.json` (and `.sig`) last.** A client that reads an
+   index naming an archive you have not finished uploading gets a 404. This is
+   why a bulk `sync` of `dist/` is wrong — it gives no ordering guarantee.
+2. **Never delete on sync.** Old archives are still referenced by the entries
+   older installs depend on.
+
+**S3-compatible (R2, B2, Spaces, Wasabi, S3):**
+
+```bash
+aws s3 cp dist/ s3://$BUCKET/stable/ --recursive --exclude "bundles.json*" \
+  --cache-control "public, max-age=31536000, immutable"
+aws s3 cp dist/bundles.json s3://$BUCKET/stable/ --cache-control "no-cache"
+aws s3 cp dist/bundles.json.sig s3://$BUCKET/stable/ --cache-control "no-cache"
+```
+
+**Cloudflare R2 via wrangler:**
+
+```bash
+for f in dist/bundle-*.zip; do wrangler r2 object put "$BUCKET/stable/$(basename "$f")" --file "$f"; done
+wrangler r2 object put "$BUCKET/stable/bundles.json"     --file dist/bundles.json     --cache-control "no-cache"
+wrangler r2 object put "$BUCKET/stable/bundles.json.sig" --file dist/bundles.json.sig --cache-control "no-cache"
+```
+
+**GitHub Releases** (use a fixed tag so the URL is stable):
+
+```bash
+gh release upload updates dist/bundle-*.zip --clobber
+gh release upload updates dist/bundles.json dist/bundles.json.sig --clobber
+# feedUrl: https://github.com/<owner>/<repo>/releases/download/updates/bundles.json
+```
+
+Cache headers matter more than they look: archive names contain the hash, so they
+can cache forever, but an index cached for hours means your rollback does not
+reach anyone.
+
+### In CI
+
+```yaml
+- run: npm version ${{ inputs.bump }} --no-git-tag-version
+- run: npx vidra bundle --merge-from https://updates.example.com/bundles.json
+  env:
+    VIDRA_UPDATE_SIGNING_KEY: ${{ secrets.VIDRA_UPDATE_SIGNING_KEY }}
+- run: ./scripts/upload-feed.sh        # the two-step upload above
+```
 
 ## What decides whether an update installs
 
