@@ -43,9 +43,18 @@ fs.mkdirSync(feed, { recursive: true });
 try {
   publishGoodBundle();
   server = serveFeed();
+  await waitForFeed();
 
   // ---- staged: the update is downloaded, and does not take effect yet --------
-  const staged = launch("staged");
+  // The first launch gets a longer window and one retry: the app's first HTTP
+  // request of the run has been seen to take longer than every later one, and a
+  // check that has not come back yet is not the same claim as a check that
+  // refused something.
+  let staged = launch("staged", { timeout: 90 });
+  if (staged.pendingVersion === null) {
+    console.log("==> the first check did not come back in time; retrying once");
+    staged = launch("staged-retry", { timeout: 90 });
+  }
   expect(staged.marker, "undefined", "the embedded bundle carries no marker");
   expect(staged.pendingVersion, "1.3.0", "bundle staged for the next launch");
   expect(staged.currentVersion, null, "nothing promoted mid-session");
@@ -183,6 +192,25 @@ function addEntry(entry) {
 
 function readManifest() {
   return JSON.parse(fs.readFileSync(path.join(feed, "bundles.json"), "utf8"));
+}
+
+/** Blocks until the feed is actually answering, so launch 1 is not a race. */
+async function waitForFeed() {
+  const url = `http://127.0.0.1:${port}/bundles.json`;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      if (response.ok) {
+        await response.text();
+        console.log(`==> feed is answering at ${url}`);
+        return;
+      }
+    } catch {
+      // Not up yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`the feed never answered at ${url}`);
 }
 
 function serveFeed() {
