@@ -41,6 +41,42 @@ public sealed record UpdateState
     public IReadOnlyList<string> Blocked { get; init; } = [];
 
     /// <summary>
+    /// Compares by value, including <see cref="Blocked"/>.
+    /// </summary>
+    /// <remarks>
+    /// A record's synthesized equality compares <see cref="Blocked"/> by
+    /// reference, so two states that are identical in every way — the one just
+    /// written and the one just read back — would compare unequal purely because
+    /// each holds its own list. Anything that asks "did this change?" before
+    /// writing to disk would answer yes, always.
+    /// </remarks>
+    public bool Equals(UpdateState? other)
+        => other is not null
+            && Current == other.Current
+            && CurrentVersion == other.CurrentVersion
+            && Previous == other.Previous
+            && PreviousVersion == other.PreviousVersion
+            && Pending == other.Pending
+            && PendingVersion == other.PendingVersion
+            && Probation == other.Probation
+            && Blocked.SequenceEqual(other.Blocked, StringComparer.Ordinal);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Current);
+        hash.Add(CurrentVersion);
+        hash.Add(Previous);
+        hash.Add(PreviousVersion);
+        hash.Add(Pending);
+        hash.Add(PendingVersion);
+        hash.Add(Probation);
+        foreach (var sha in Blocked)
+            hash.Add(sha, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
+
+    /// <summary>
     /// Reads a state document. Any damage — truncated write, hand-edit, a schema
     /// from a newer host — resolves to <see cref="Empty"/> rather than throwing:
     /// the consequence is serving the embedded copy, which is always correct, and
