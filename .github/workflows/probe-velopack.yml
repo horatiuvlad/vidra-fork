@@ -202,6 +202,19 @@ jobs:
           echo "---- other .app directories in the tree ----"
           find "$root" -name '*.app' -type d -maxdepth 2
 
+      # `vpk` rejects `--signEntitlements` unless the file is named
+      # `*.entitlements`. Vidra's template ships `Entitlements.plist`, which the
+      # MacCatalyst SDK requires under that name — so the two conventions
+      # collide and something has to copy the file. Doing it here keeps the
+      # finding visible instead of hiding it in a renamed template.
+      - name: Give vpk an entitlements file with the extension it demands
+        shell: bash
+        run: |
+          src="${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist"
+          dest="${{ runner.temp }}/vidra.entitlements"
+          cp "$src" "$dest"
+          echo "ENTITLEMENTS=$dest" >> "$GITHUB_ENV"
+
       # ---- Question 1: signing ----
       #
       # Baseline first: what `vidra build` establishes today, on the same axes
@@ -224,7 +237,7 @@ jobs:
             --mainExe "$MAIN_EXE" --outputDir "$out" || echo "::warning::vpk pack (A) failed"
           ls -la "$out"
           set +x
-          zip="$(ls "$out"/*Portable.zip 2>/dev/null | head -1)"
+          zip="$(ls "$out"/*Portable.zip 2>/dev/null | head -1 || true)"
           if [ -n "$zip" ]; then
             rm -rf "${{ runner.temp }}/extractA"; mkdir -p "${{ runner.temp }}/extractA"
             ditto -x -k "$zip" "${{ runner.temp }}/extractA"
@@ -240,7 +253,7 @@ jobs:
         run: |
           set -x
           out="${{ runner.temp }}/packB"
-          ents="${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist"
+          ents="$ENTITLEMENTS"
           rm -rf "$out" "${{ runner.temp }}/appB.app"; mkdir -p "$out"
           cp -R "$APP" "${{ runner.temp }}/appB.app"
           vpk pack --packId ${{ env.PACK_ID }} --packVersion 1.0.0 \
@@ -251,7 +264,7 @@ jobs:
             --keychain "$VELO_KEYCHAIN" || echo "::warning::vpk pack (B) failed"
           ls -la "$out"
           set +x
-          zip="$(ls "$out"/*Portable.zip 2>/dev/null | head -1)"
+          zip="$(ls "$out"/*Portable.zip 2>/dev/null | head -1 || true)"
           if [ -n "$zip" ]; then
             rm -rf "${{ runner.temp }}/extractB"; mkdir -p "${{ runner.temp }}/extractB"
             ditto -x -k "$zip" "${{ runner.temp }}/extractB"
@@ -271,7 +284,7 @@ jobs:
         run: |
           set -x
           out="${{ runner.temp }}/packB2"
-          ents="${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist"
+          ents="$ENTITLEMENTS"
           rm -rf "$out" "${{ runner.temp }}/appB2.app"; mkdir -p "$out"
           cp -R "$APP" "${{ runner.temp }}/appB2.app"
           vpk pack --packId ${{ env.PACK_ID }} --packVersion 1.0.0 \
@@ -283,7 +296,7 @@ jobs:
             --keychain "$VELO_KEYCHAIN" || echo "::warning::vpk pack (B2) failed"
           ls -la "$out" || true
           set +x
-          pkg="$(ls "$out"/*.pkg 2>/dev/null | head -1)"
+          pkg="$(ls "$out"/*.pkg 2>/dev/null | head -1 || true)"
           if [ -n "$pkg" ]; then
             echo "---- pkgutil --check-signature ----"
             pkgutil --check-signature "$pkg" || true
@@ -302,7 +315,7 @@ jobs:
           set -x
           work="${{ runner.temp }}/resignC"
           rm -rf "$work"; mkdir -p "$work"
-          nupkg="$(ls "${{ runner.temp }}/packA"/*.nupkg 2>/dev/null | head -1)"
+          nupkg="$(ls "${{ runner.temp }}/packA"/*.nupkg 2>/dev/null | head -1 || true)"
           echo "nupkg: $nupkg"
           if [ -n "$nupkg" ]; then
             ditto -x -k "$nupkg" "$work/unpacked" 2>/dev/null || unzip -q "$nupkg" -d "$work/unpacked"
@@ -311,7 +324,7 @@ jobs:
             echo "app inside the release package: ${packed:-<none>}"
             if [ -n "$packed" ]; then
               codesign --force --timestamp --options runtime \
-                --entitlements "${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist" \
+                --entitlements "$ENTITLEMENTS" \
                 --sign "$VELO_APP_IDENTITY" --keychain "$VELO_KEYCHAIN" "$packed" \
                 && bash tests/ci/probe-velopack-inspect.sh resigned-in-release "$packed" \
                      "${{ runner.temp }}/sig/03-resigned.json"
@@ -343,7 +356,7 @@ jobs:
             vpk pack --packId ${{ env.PACK_ID }} --packVersion "$v" \
               --packDir "$dest" --mainExe "$MAIN_EXE" --outputDir "$feed" \
               --signAppIdentity "$VELO_APP_IDENTITY" \
-              --signEntitlements "${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist" \
+              --signEntitlements "$ENTITLEMENTS" \
               --keychain "$VELO_KEYCHAIN"
             if [ "$v" = "1.0.0" ]; then
               rm -rf "${{ runner.temp }}/install"; mkdir -p "${{ runner.temp }}/install"
@@ -375,6 +388,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          [ -n "${INSTALLED_APP:-}" ] || { echo "no install to inspect"; exit 0; }
           bash tests/ci/probe-velopack-inspect.sh updated-1.0.1 "$INSTALLED_APP" \
             "${{ runner.temp }}/sig/11-updated.json"
 
@@ -564,6 +578,12 @@ jobs:
       # Setup.exe, and those are the binaries SmartScreen actually judges.
       - name: Scenario W — vpk pack --signParams (Authenticode)
         shell: bash
+        env:
+          # git-bash rewrites any argument that starts with `/` into a Windows
+          # path, so `/sha1 <thumb> /fd SHA256` arrived at signtool mangled and
+          # it complained that no digest algorithm was specified — for a flag
+          # that was plainly in the command line.
+          MSYS2_ARG_CONV_EXCL: "*"
         run: |
           set -x
           out="${{ runner.temp }}/packW"
@@ -573,6 +593,7 @@ jobs:
             --mainExe "${{ env.PROJECT }}.Host.exe" \
             --outputDir "$(cygpath -w "$out")" \
             --signParams "/sha1 $VIDRA_WINDOWS_CERT_THUMBPRINT /fd SHA256" \
+            --verbose \
             || echo "::warning::vpk pack (W) failed"
           set +x
           ls -la "$out" || true

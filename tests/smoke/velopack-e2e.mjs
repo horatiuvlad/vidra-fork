@@ -130,10 +130,19 @@ function resolveExe() {
   return exe;
 }
 
+/**
+ * On Windows the path passed as `--exe` is Velopack's shim at the install root;
+ * the app that actually runs — and the one an update replaces — lives in
+ * `current/`. Reading the payload next to the shim reports the *first*
+ * install's file forever and makes a successful update look like a timeout.
+ */
 function readPayloadOnDisk() {
   const candidates = exe.endsWith(".app")
     ? [path.join(exe, "Contents", "Resources", "vidra-probe-payload.txt")]
-    : [path.join(path.dirname(exe), "vidra-probe-payload.txt")];
+    : [
+        path.join(path.dirname(exe), "current", "vidra-probe-payload.txt"),
+        path.join(path.dirname(exe), "vidra-probe-payload.txt"),
+      ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return fs.readFileSync(c, "utf8").trim();
   }
