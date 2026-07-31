@@ -10,8 +10,10 @@
 //
 // Without VIDRA_VELO_PROOF set it behaves like the normal template page.
 
+using System.Runtime.InteropServices;
 using System.Text;
 using Velopack;
+using Velopack.Locators;
 using Vidra.Hosting;
 
 namespace __PROJECT_NAMESPACE__;
@@ -86,6 +88,19 @@ public class MainPage : VidraPage
         Append(json, "appDataDirectory", TryAppData());
         Append(json, "sqVersion", ReadSqVersion());
         Append(json, "error", error);
+        // Is this an unsupported platform or a bug? Velopack picks a locator
+        // from `RuntimeInformation.IsOSPlatform`, so record what those
+        // predicates actually answer here instead of reasoning about what they
+        // ought to answer.
+        Append(json, "isOSPlatformOSX", RuntimeInformation.IsOSPlatform(OSPlatform.OSX).ToString());
+        Append(json, "isMacCatalyst", OperatingSystem.IsMacCatalyst().ToString());
+        Append(json, "isMacOS", OperatingSystem.IsMacOS().ToString());
+        Append(json, "runtimeIdentifier", RuntimeInformation.RuntimeIdentifier);
+        Append(json, "velopackRunError", VelopackRunError());
+        // The documented escape hatch: `VelopackApp.Build().SetLocator(...)` is
+        // public and so is this constructor. If it refuses to be built, there
+        // is no outside-in workaround and the fix has to be upstream.
+        Append(json, "osxLocatorError", TryConstructOsxLocator());
         json.Append(",\n  \"downloaded\": ").Append(downloaded ? "true" : "false");
         json.Append(",\n  \"staged\": ").Append(staged ? "true" : "false");
         json.Append("\n}\n");
@@ -112,6 +127,38 @@ public class MainPage : VidraPage
             if (File.Exists(candidate)) return File.ReadAllText(candidate).Trim();
         }
         return null;
+    }
+
+    /// <summary>
+    /// What <c>VelopackApp.Run()</c> did at the entry point. Catalyst-only: the
+    /// Windows leg keeps MAUI's generated <c>Main</c>, so there is no
+    /// <c>Program</c> of ours to ask.
+    /// </summary>
+    private static string? VelopackRunError()
+    {
+#if MACCATALYST
+        return Program.VelopackRunError ?? "none";
+#else
+        return null;
+#endif
+    }
+
+    /// <summary>
+    /// Try to build Velopack's own OSX locator directly. Returns the failure,
+    /// or <c>"constructed"</c> if it works — in which case a Vidra-side
+    /// <c>SetLocator</c> shim is on the table and macOS is not blocked.
+    /// </summary>
+    private static string TryConstructOsxLocator()
+    {
+        try
+        {
+            var locator = new OsxVelopackLocator(null, null);
+            return $"constructed; appId={locator.AppId ?? "<null>"} root={locator.RootAppDir ?? "<null>"}";
+        }
+        catch (Exception ex)
+        {
+            return $"{ex.GetType().FullName}: {ex.Message}";
+        }
     }
 
     private static string? TryAppData()

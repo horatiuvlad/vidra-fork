@@ -7,7 +7,16 @@
 //
 // This is the shape question 2 of the proposal is about — here it is a probe
 // file swapped over the template, not a template change.
+//
+// The try/catch is not defensive coding, it is the measurement. `Run()` threw
+// `PlatformNotSupportedException` here and took the process down before
+// anything could be observed, so the whole macOS round-trip reported as "the
+// app produced no proof" — a symptom that looks identical to a hung launch, a
+// crashed WebView, or a broken updater. Catching it lets the app keep going and
+// write down what the platform actually says about itself, which is the only
+// way to tell an unsupported platform from a bug.
 
+using System.Runtime.InteropServices;
 using UIKit;
 using Velopack;
 
@@ -15,9 +24,28 @@ namespace __PROJECT_NAMESPACE__;
 
 public static class Program
 {
+    /// <summary>What <c>VelopackApp.Run()</c> did, read back by the probe page.</summary>
+    public static string? VelopackRunError;
+
     static void Main(string[] args)
     {
-        VelopackApp.Build().Run();
+        try
+        {
+            VelopackApp.Build().Run();
+        }
+        catch (Exception ex)
+        {
+            VelopackRunError = $"{ex.GetType().FullName}: {ex.Message}";
+            Console.WriteLine($"[probe] VelopackApp.Run() threw: {VelopackRunError}");
+        }
+
+        // Printed as well as recorded: if the app dies later for an unrelated
+        // reason, these three lines are still in the log.
+        Console.WriteLine($"[probe] IsOSPlatform(OSX)={RuntimeInformation.IsOSPlatform(OSPlatform.OSX)} "
+            + $"IsMacCatalyst={OperatingSystem.IsMacCatalyst()} IsMacOS={OperatingSystem.IsMacOS()}");
+        Console.WriteLine($"[probe] RuntimeIdentifier={RuntimeInformation.RuntimeIdentifier} "
+            + $"OSDescription={RuntimeInformation.OSDescription}");
+
         UIApplication.Main(args, null, typeof(AppDelegate));
     }
 }
