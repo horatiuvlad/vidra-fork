@@ -17,7 +17,7 @@
 // app directory, so a handle captured once would be to a directory that no
 // longer exists.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -50,6 +50,15 @@ try {
   // The updater runs after the app exits; give it room, then re-resolve.
   await waitFor(() => readPayloadOnDisk() === "payload-1.0.1", 120_000,
     "the updater replaced the app on disk");
+
+  // The payload file appearing means the swap *started*, not that the updater
+  // is done — it still has shortcuts, the old package and its own exit to get
+  // through. Launching into that window starts an app whose directory is being
+  // rewritten underneath it, and the symptom is a launch that produces nothing
+  // at all. (The first version of this script accidentally waited: its payload
+  // check looked in the wrong directory and burned the full 120s timeout here,
+  // which is why the race never showed.)
+  await waitForUpdaterToExit(120_000);
 
   const after = await launch("3-report-after", { VIDRA_VELO_MODE: "report" });
   expect(after.currentVersion === "1.0.1", "the updated app reports 1.0.1", after.currentVersion);
@@ -120,14 +129,62 @@ function serve(root, port) {
 /**
  * The executable moves with the app directory when an update is applied, so
  * resolve it fresh. `--exe` may name the binary or, on macOS, the .app.
+ *
+ * Inside a packed .app, `Contents/MacOS` holds *three* things: the app's own
+ * binary, Velopack's `UpdateMac`, and a `sq.version`. Taking the first
+ * directory entry launches whichever the filesystem happens to list first —
+ * here that was `UpdateMac`, which starts, finds no `--veloapp-*` subcommand,
+ * exits, and looks exactly like an app that failed to boot. `sq.version` is
+ * Velopack's own record of which binary is the app, so read it rather than
+ * guess.
  */
 function resolveExe() {
-  if (exe.endsWith(".app")) {
-    const macos = path.join(exe, "Contents", "MacOS");
-    const entry = fs.readdirSync(macos).find((f) => !f.startsWith("."));
-    return path.join(macos, entry);
+  if (!exe.endsWith(".app")) return exe;
+
+  const macos = path.join(exe, "Contents", "MacOS");
+  const declared = readMainExe(exe);
+  if (declared && fs.existsSync(path.join(macos, declared))) {
+    return path.join(macos, declared);
   }
-  return exe;
+  const entry = fs
+    .readdirSync(macos)
+    .find((f) => !f.startsWith(".") && f !== "UpdateMac" && f !== "sq.version");
+  return path.join(macos, entry);
+}
+
+/** `<mainExe>` out of the nuspec Velopack drops in as `sq.version`. */
+function readMainExe(appBundle) {
+  for (const dir of ["Resources", "MacOS"]) {
+    const file = path.join(appBundle, "Contents", dir, "sq.version");
+    if (!fs.existsSync(file)) continue;
+    const match = /<mainExe>([^<]+)<\/mainExe>/.exec(fs.readFileSync(file, "utf8"));
+    if (match) return match[1].trim();
+  }
+  return null;
+}
+
+/**
+ * Wait until no Velopack updater process is left running. Applying an update is
+ * not over when the new files appear.
+ */
+async function waitForUpdaterToExit(timeoutMs) {
+  const name = process.platform === "win32" ? "Update.exe" : "UpdateMac";
+  const running = () => {
+    const probe =
+      process.platform === "win32"
+        ? spawnSync("tasklist", ["/FI", `IMAGENAME eq ${name}`], { encoding: "utf8" })
+        : spawnSync("pgrep", ["-x", name], { encoding: "utf8" });
+    return (probe.stdout ?? "").includes(name);
+  };
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && running()) {
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  // A short settle even once the process is gone: the last thing it does is
+  // exit, and the directory swap is complete a beat before that.
+  await new Promise((r) => setTimeout(r, 3000));
+  console.log(`  ok   the updater (${name}) finished`);
 }
 
 /**
