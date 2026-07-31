@@ -1,0 +1,584 @@
+name: Probe — Velopack
+
+# A throwaway measurement rig for the Velopack architecture proposal. Not part
+# of CI; deleted once the questions it answers are written down.
+#
+# What it is trying to settle, in order of how much it can invalidate:
+#   1. Signing. `vpk pack` re-signs the bundle. Does handing it a Developer ID
+#      identity produce a bundle signed with that identity, hardened, with the
+#      .NET JIT entitlements intact — and does re-signing after the fact work
+#      at all, or does it break the release the updater reads?
+#   2. The update round-trip, 1.0.0 -> 1.0.1, on both platforms, in a *packaged*
+#      app — including whether the signature is still there afterwards.
+#   3. The Windows artifact shape: what `vpk pack` emits next to the ZIP
+#      `vidra build --target windows` produces today.
+#
+# Every scenario writes a machine-readable record rather than a log line, so
+# they are comparable rather than merely present.
+
+on:
+  push:
+    branches:
+      - "probe/**"
+  workflow_dispatch:
+
+jobs:
+  # Cheap and first: whatever else happens, this job tells us the exact option
+  # surface of the `vpk` we are testing against, on both platforms.
+  vpk-surface:
+    name: vpk surface (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Install vpk
+        shell: bash
+        run: |
+          dotnet tool install -g vpk
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+      - name: vpk version and options
+        shell: bash
+        run: |
+          set +e
+          vpk --version
+          echo "======== vpk --help ========"
+          vpk --help
+          echo "======== vpk pack --help ========"
+          vpk pack --help
+          echo "======== vpk upload --help ========"
+          vpk upload --help
+          echo "======== vpk delta --help ========"
+          vpk delta --help
+          exit 0
+
+  macos:
+    name: Velopack round-trip (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      PROJECT: VidraSmoke
+      PACK_ID: com.vidra.veloprobe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            src/cli/create-vidra-app/package-lock.json
+            src/sdk/vidra-js/package-lock.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', 'pack-local.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Install vpk
+        shell: bash
+        run: |
+          dotnet tool install -g vpk
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Log toolchain
+        shell: bash
+        run: |
+          xcode-select -p
+          xcodebuild -version
+          "$HOME/.dotnet/tools/vpk" --version || true
+
+      - name: Install MAUI workload
+        shell: bash
+        run: dotnet workload install maui
+
+      - name: Build SDK
+        shell: bash
+        working-directory: src/sdk/vidra-js
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Build and link CLI
+        shell: bash
+        working-directory: src/cli/create-vidra-app
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Pack local NuGet feed
+        shell: bash
+        run: ./pack-local.sh
+
+      - name: Scaffold a throwaway app
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/index.js" \
+            vidra-smoke --app-id=${{ env.PACK_ID }}
+          ls vidra-smoke
+
+      - name: Build scaffolded UI (Vite)
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke/ui
+        run: |
+          npm ci || npm install
+          npm run build --if-present
+
+      # ---- Question 2: what the app-side integration costs ----
+      #
+      # A package reference, a `VelopackApp.Build().Run()` in the Catalyst entry
+      # point, and nothing else. If either has to move, that is the finding.
+      - name: Add Velopack to the scaffolded app
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node -e "
+            const fs = require('fs');
+            const file = 'src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj';
+            const xml = fs.readFileSync(file, 'utf8');
+            fs.writeFileSync(file, xml.replace(
+              /(<PackageReference Include=\"Vidra.Hosting.Maui\"[^>]*\/>)/,
+              '\$1\n    <PackageReference Include=\"Velopack\" Version=\"1.*\" />'));
+          "
+          grep -n "Velopack" "src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj"
+          sed 's/__PROJECT_NAMESPACE__/${{ env.PROJECT }}/' \
+            "$GITHUB_WORKSPACE/tests/smoke/velopack-program.cs.in" \
+            > "src/${{ env.PROJECT }}.Host/Platforms/MacCatalyst/Program.cs"
+          sed 's/__PROJECT_NAMESPACE__/${{ env.PROJECT }}/' \
+            "$GITHUB_WORKSPACE/tests/smoke/velopack-main-page.cs.in" \
+            > "src/${{ env.PROJECT }}.Host/MainPage.cs"
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '1.0.0';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Create the self-signed Developer ID identities
+        timeout-minutes: 5
+        shell: bash
+        run: bash tests/ci/probe-velopack-identities.sh
+
+      - name: vidra build --target macos
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target macos --verbose
+
+      - name: Locate the built .app
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          root="src/${{ env.PROJECT }}.Host/bin/Release/net10.0-maccatalyst"
+          app="$(find "$root" -maxdepth 2 -name '*.app' -type d -print -quit)"
+          [ -n "$app" ] || { echo "::error::no .app under $root"; exit 1; }
+          echo "APP=$PWD/$app" >> "$GITHUB_ENV"
+          bin="$app/Contents/MacOS/$(ls "$app/Contents/MacOS" | head -1)"
+          echo "MAIN_EXE=$(basename "$bin")" >> "$GITHUB_ENV"
+          echo "==> $app  (mainExe: $(basename "$bin"))"
+          lipo -archs "$bin" || file "$bin"
+
+      # ---- Question 1: signing ----
+      #
+      # Baseline first: what `vidra build` establishes today, on the same axes
+      # every scenario below is measured on.
+      - name: Baseline — the signature vidra build produced
+        shell: bash
+        run: |
+          bash tests/ci/probe-velopack-inspect.sh baseline-vidra-build "$APP" \
+            "${{ runner.temp }}/sig/00-baseline.json"
+
+      - name: Scenario A — vpk pack with no signing options
+        shell: bash
+        run: |
+          set -x
+          out="${{ runner.temp }}/packA"
+          rm -rf "$out"; mkdir -p "$out"
+          cp -R "$APP" "${{ runner.temp }}/appA.app"
+          vpk pack --packId ${{ env.PACK_ID }} --packVersion 1.0.0 \
+            --packDir "${{ runner.temp }}/appA.app" \
+            --mainExe "$MAIN_EXE" --outputDir "$out" || echo "::warning::vpk pack (A) failed"
+          ls -la "$out"
+          set +x
+          zip="$(ls "$out"/*Portable.zip 2>/dev/null | head -1)"
+          if [ -n "$zip" ]; then
+            rm -rf "${{ runner.temp }}/extractA"; mkdir -p "${{ runner.temp }}/extractA"
+            ditto -x -k "$zip" "${{ runner.temp }}/extractA"
+            packed="$(find "${{ runner.temp }}/extractA" -maxdepth 2 -name '*.app' -print -quit)"
+            bash tests/ci/probe-velopack-inspect.sh vpk-unsigned "$packed" \
+              "${{ runner.temp }}/sig/01-vpk-unsigned.json"
+          else
+            echo "::warning::scenario A produced no portable zip"
+          fi
+
+      - name: Scenario B — vpk pack --signAppIdentity + our entitlements
+        shell: bash
+        run: |
+          set -x
+          out="${{ runner.temp }}/packB"
+          ents="${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist"
+          rm -rf "$out" "${{ runner.temp }}/appB.app"; mkdir -p "$out"
+          cp -R "$APP" "${{ runner.temp }}/appB.app"
+          vpk pack --packId ${{ env.PACK_ID }} --packVersion 1.0.0 \
+            --packDir "${{ runner.temp }}/appB.app" \
+            --mainExe "$MAIN_EXE" --outputDir "$out" \
+            --signAppIdentity "$VELO_APP_IDENTITY" \
+            --signEntitlements "$ents" \
+            --keychain "$VELO_KEYCHAIN" || echo "::warning::vpk pack (B) failed"
+          ls -la "$out"
+          set +x
+          zip="$(ls "$out"/*Portable.zip 2>/dev/null | head -1)"
+          if [ -n "$zip" ]; then
+            rm -rf "${{ runner.temp }}/extractB"; mkdir -p "${{ runner.temp }}/extractB"
+            ditto -x -k "$zip" "${{ runner.temp }}/extractB"
+            packed="$(find "${{ runner.temp }}/extractB" -maxdepth 2 -name '*.app' -print -quit)"
+            bash tests/ci/probe-velopack-inspect.sh vpk-signed "$packed" \
+              "${{ runner.temp }}/sig/02-vpk-signed.json"
+          else
+            echo "::warning::scenario B produced no portable zip"
+          fi
+          exit 0
+
+      # Separate from B on purpose: `productsign` may well refuse a self-signed
+      # installer certificate, and if it does, a combined step would tell us
+      # nothing about whether app signing worked.
+      - name: Scenario B2 — also sign the .pkg installer
+        shell: bash
+        run: |
+          set -x
+          out="${{ runner.temp }}/packB2"
+          ents="${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist"
+          rm -rf "$out" "${{ runner.temp }}/appB2.app"; mkdir -p "$out"
+          cp -R "$APP" "${{ runner.temp }}/appB2.app"
+          vpk pack --packId ${{ env.PACK_ID }} --packVersion 1.0.0 \
+            --packDir "${{ runner.temp }}/appB2.app" \
+            --mainExe "$MAIN_EXE" --outputDir "$out" \
+            --signAppIdentity "$VELO_APP_IDENTITY" \
+            --signInstallIdentity "$VELO_INSTALL_IDENTITY" \
+            --signEntitlements "$ents" \
+            --keychain "$VELO_KEYCHAIN" || echo "::warning::vpk pack (B2) failed"
+          ls -la "$out" || true
+          set +x
+          pkg="$(ls "$out"/*.pkg 2>/dev/null | head -1)"
+          if [ -n "$pkg" ]; then
+            echo "---- pkgutil --check-signature ----"
+            pkgutil --check-signature "$pkg" || true
+          else
+            echo "::warning::no .pkg produced in B2"
+          fi
+          exit 0
+
+      # Does the "sign afterwards" option in the proposal even exist? Re-signing
+      # the .app inside the release package changes bytes the release index has
+      # already hashed, so the interesting answer is not whether codesign
+      # succeeds — it is whether the updater still accepts the result.
+      - name: Scenario C — re-sign after an unsigned vpk pack
+        shell: bash
+        run: |
+          set -x
+          work="${{ runner.temp }}/resignC"
+          rm -rf "$work"; mkdir -p "$work"
+          nupkg="$(ls "${{ runner.temp }}/packA"/*.nupkg 2>/dev/null | head -1)"
+          echo "nupkg: $nupkg"
+          if [ -n "$nupkg" ]; then
+            ditto -x -k "$nupkg" "$work/unpacked" 2>/dev/null || unzip -q "$nupkg" -d "$work/unpacked"
+            find "$work/unpacked" -maxdepth 3 -name '*.app' -o -maxdepth 3 -type d | head -20
+            packed="$(find "$work/unpacked" -maxdepth 4 -name '*.app' -type d -print -quit)"
+            echo "app inside the release package: ${packed:-<none>}"
+            if [ -n "$packed" ]; then
+              codesign --force --timestamp --options runtime \
+                --entitlements "${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist" \
+                --sign "$VELO_APP_IDENTITY" --keychain "$VELO_KEYCHAIN" "$packed" \
+                && bash tests/ci/probe-velopack-inspect.sh resigned-in-release "$packed" \
+                     "${{ runner.temp }}/sig/03-resigned.json"
+            fi
+          fi
+          set +x
+          exit 0
+
+      # ---- Questions 2 + 3: the round-trip ----
+      - name: Build the 1.0.0 and 1.0.1 feed
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          feed="${{ runner.temp }}/feed"
+          rm -rf "$feed" "${{ runner.temp }}/v100.app" "${{ runner.temp }}/v101.app"
+          mkdir -p "$feed"
+
+          # The payload file is what proves bytes moved. Two copies of the same
+          # signed build differing only by that file keeps the round-trip a test
+          # of the *updater*, not of a second five-minute Catalyst build.
+          for v in 1.0.0 1.0.1; do
+            dest="${{ runner.temp }}/v${v//./}.app"
+            cp -R "$APP" "$dest"
+            echo "payload-$v" > "$dest/Contents/Resources/vidra-probe-payload.txt"
+          done
+
+          for v in 1.0.0 1.0.1; do
+            dest="${{ runner.temp }}/v${v//./}.app"
+            vpk pack --packId ${{ env.PACK_ID }} --packVersion "$v" \
+              --packDir "$dest" --mainExe "$MAIN_EXE" --outputDir "$feed" \
+              --signAppIdentity "$VELO_APP_IDENTITY" \
+              --signEntitlements "${{ runner.temp }}/vidra-smoke/src/${{ env.PROJECT }}.Host/Entitlements.plist" \
+              --keychain "$VELO_KEYCHAIN"
+            if [ "$v" = "1.0.0" ]; then
+              rm -rf "${{ runner.temp }}/install"; mkdir -p "${{ runner.temp }}/install"
+              ditto -x -k "$(ls "$feed"/*Portable.zip | head -1)" "${{ runner.temp }}/install"
+              installed="$(find "${{ runner.temp }}/install" -maxdepth 2 -name '*.app' -type d -print -quit)"
+              echo "INSTALLED_APP=$installed" >> "$GITHUB_ENV"
+              echo "==> installed 1.0.0 at $installed"
+            fi
+          done
+          ls -la "$feed"
+          cat "$feed"/releases*.json || true
+
+      - name: The installed 1.0.0 app is signed the way we asked
+        shell: bash
+        run: |
+          bash tests/ci/probe-velopack-inspect.sh installed-1.0.0 "$INSTALLED_APP" \
+            "${{ runner.temp }}/sig/10-installed.json"
+
+      - name: Apply a 1.0.0 -> 1.0.1 update
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          node tests/smoke/velopack-e2e.mjs \
+            --exe "$INSTALLED_APP" \
+            --feed "${{ runner.temp }}/feed" \
+            --work "${{ runner.temp }}/velo-work"
+
+      - name: The updated app is still signed
+        if: always()
+        shell: bash
+        run: |
+          bash tests/ci/probe-velopack-inspect.sh updated-1.0.1 "$INSTALLED_APP" \
+            "${{ runner.temp }}/sig/11-updated.json"
+
+      - name: Summarise every signature record
+        if: always()
+        shell: bash
+        run: |
+          echo "| scenario | authority | adhoc | hardened | jit ent | verify | deep |"
+          echo "|---|---|---|---|---|---|---|"
+          for f in "${{ runner.temp }}"/sig/*.json; do
+            [ -f "$f" ] || continue
+            node -e "
+              const r = require('$f');
+              console.log('| ' + [r.label, r.authority, r.adhoc, r.hardenedRuntime,
+                r.entitlementAllowJit, r.verifyStrict, r.verifyDeepStrict].join(' | ') + ' |');
+            "
+          done
+
+      - name: Upload probe records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velopack-macos-records
+          path: |
+            ${{ runner.temp }}/sig/*.json
+            ${{ runner.temp }}/velo-work/*
+          if-no-files-found: ignore
+
+  windows:
+    name: Velopack round-trip (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PROJECT: VidraSmoke
+      PACK_ID: com.vidra.veloprobe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            src/cli/create-vidra-app/package-lock.json
+            src/sdk/vidra-js/package-lock.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', 'pack-local.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Install vpk
+        shell: bash
+        run: |
+          dotnet tool install -g vpk
+          echo "$USERPROFILE\\.dotnet\\tools" >> "$GITHUB_PATH"
+
+      - name: Install MAUI workload
+        shell: bash
+        run: dotnet workload install maui-windows
+
+      - name: Build SDK
+        shell: bash
+        working-directory: src/sdk/vidra-js
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Build and link CLI
+        shell: bash
+        working-directory: src/cli/create-vidra-app
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Pack local NuGet feed
+        shell: bash
+        run: ./pack-local.sh
+
+      - name: Scaffold a throwaway app
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/index.js" \
+            vidra-smoke --app-id=${{ env.PACK_ID }}
+          ls vidra-smoke
+
+      - name: Build scaffolded UI (Vite)
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke/ui
+        run: |
+          npm ci || npm install
+          npm run build --if-present
+
+      # MAUI generates the WinUI `Main` for you, so the earliest place an app
+      # can call `VelopackApp.Build().Run()` without taking that generation over
+      # is the WinUI `App` constructor. Whether that is early enough for
+      # Velopack's install/update hooks is exactly what this probe measures.
+      - name: Add Velopack to the scaffolded app
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node -e "
+            const fs = require('fs');
+            const file = 'src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj';
+            const xml = fs.readFileSync(file, 'utf8');
+            fs.writeFileSync(file, xml.replace(
+              /(<PackageReference Include=\"Vidra.Hosting.Maui\"[^>]*\/>)/,
+              '\$1\n    <PackageReference Include=\"Velopack\" Version=\"1.*\" />'));
+            const win = 'src/${{ env.PROJECT }}.Host/Platforms/Windows/App.xaml.cs';
+            const cs = fs.readFileSync(win, 'utf8');
+            fs.writeFileSync(win, cs
+              .replace('public App()', 'public App()')
+              .replace('this.InitializeComponent();',
+                'Velopack.VelopackApp.Build().Run();\n        this.InitializeComponent();'));
+          "
+          grep -n "Velopack" "src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj" \
+            "src/${{ env.PROJECT }}.Host/Platforms/Windows/App.xaml.cs"
+          sed 's/__PROJECT_NAMESPACE__/${{ env.PROJECT }}/' \
+            "$GITHUB_WORKSPACE/tests/smoke/velopack-main-page.cs.in" \
+            > "src/${{ env.PROJECT }}.Host/MainPage.cs"
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '1.0.0';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Create a self-signed Authenticode certificate
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./tests/ci/windows-selfsigned-cert.ps1
+
+      - name: vidra build --target windows
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target windows --verbose
+
+      - name: Locate the publish directory
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          dir="src/${{ env.PROJECT }}.Host/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish"
+          [ -d "$dir" ] || { echo "::error::no publish dir at $dir"; exit 1; }
+          echo "PUBLISH_DIR=$(cygpath -w "$PWD/$dir")" >> "$GITHUB_ENV"
+          ls "$dir" | head -20
+
+      # ---- Question 4: what does vpk emit next to today's self-contained ZIP ----
+      - name: Build the 1.0.0 and 1.0.1 feed
+        shell: bash
+        run: |
+          feed="${{ runner.temp }}/feed"
+          rm -rf "$feed"; mkdir -p "$feed"
+          for v in 1.0.0 1.0.1; do
+            stage="${{ runner.temp }}/stage-$v"
+            rm -rf "$stage"
+            cp -R "$(cygpath -u "$PUBLISH_DIR")" "$stage"
+            echo "payload-$v" > "$stage/vidra-probe-payload.txt"
+            vpk pack --packId ${{ env.PACK_ID }} --packVersion "$v" \
+              --packDir "$(cygpath -w "$stage")" \
+              --mainExe "${{ env.PROJECT }}.Host.exe" \
+              --outputDir "$(cygpath -w "$feed")"
+          done
+          echo "==== feed contents ===="
+          ls -la "$feed"
+          cat "$feed"/releases*.json || true
+
+      - name: Install 1.0.0 with the generated Setup.exe
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $feed = "${{ runner.temp }}/feed"
+          Get-ChildItem $feed | Format-Table Name,Length
+          $setup = Get-ChildItem $feed -Filter "*Setup.exe" | Select-Object -First 1
+          if (-not $setup) { Write-Host "::warning::no Setup.exe produced"; exit 0 }
+          Write-Host "running $($setup.FullName) --silent"
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList "--silent" -PassThru -Wait
+          Write-Host "setup exit code: $($p.ExitCode)"
+          $root = Join-Path $env:LOCALAPPDATA "${{ env.PACK_ID }}"
+          if (-not (Test-Path $root)) {
+            Write-Host "::warning::no install root at $root"
+            Get-ChildItem $env:LOCALAPPDATA | Select-Object -First 40 | Format-Table Name
+            exit 0
+          }
+          Get-ChildItem -Recurse -Depth 2 $root | Select-Object -First 60 | Format-Table FullName
+          $exe = Get-ChildItem -Recurse $root -Filter "${{ env.PROJECT }}.Host.exe" | Select-Object -First 1
+          if ($exe) { "INSTALLED_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append }
+
+      - name: Apply a 1.0.0 -> 1.0.1 update
+        if: env.INSTALLED_EXE != ''
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          node "$(cygpath -u "$GITHUB_WORKSPACE")/tests/smoke/velopack-e2e.mjs" \
+            --exe "$(cygpath -u "$INSTALLED_EXE")" \
+            --feed "${{ runner.temp }}/feed" \
+            --work "${{ runner.temp }}/velo-work"
+
+      - name: Upload probe records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velopack-windows-records
+          path: |
+            ${{ runner.temp }}/velo-work/*
+            ${{ runner.temp }}/feed/releases*.json
+          if-no-files-found: ignore

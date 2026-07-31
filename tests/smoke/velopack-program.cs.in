@@ -1,0 +1,23 @@
+// Mac Catalyst entry point for the Velopack probe.
+//
+// `VelopackApp.Build().Run()` has to run before anything else: on an install,
+// update or uninstall the app is re-launched with `--veloapp-*` arguments and
+// is expected to do that work and exit, never showing a window. Putting it
+// after `UIApplication.Main` would mean a hook launch spins up a whole MAUI app.
+//
+// This is the shape question 2 of the proposal is about — here it is a probe
+// file swapped over the template, not a template change.
+
+using UIKit;
+using Velopack;
+
+namespace __PROJECT_NAMESPACE__;
+
+public static class Program
+{
+    static void Main(string[] args)
+    {
+        VelopackApp.Build().Run();
+        UIApplication.Main(args, null, typeof(AppDelegate));
+    }
+}

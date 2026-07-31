@@ -1,0 +1,164 @@
+// Runtime proof for the Velopack native-update probe, used only by CI.
+//
+// Replaces the scaffolded app's MainPage. One launch = one JSON proof read out
+// of the running app, then exit — because "an update was applied" is a claim
+// about a *sequence* of launches and cannot be observed from one.
+//
+// VIDRA_VELO_MODE:
+//   report   what Velopack thinks is installed, and which payload is on disk
+//   update   check the feed, download, and stage the update for the next launch
+//
+// Without VIDRA_VELO_PROOF set it behaves like the normal template page.
+
+using System.Text;
+using Velopack;
+using Vidra.Hosting;
+
+namespace __PROJECT_NAMESPACE__;
+
+public class MainPage : VidraPage
+{
+    private const string PayloadFile = "vidra-probe-payload.txt";
+
+    public MainPage()
+    {
+        var proofPath = Environment.GetEnvironmentVariable("VIDRA_VELO_PROOF");
+        if (string.IsNullOrEmpty(proofPath))
+            return;
+
+        _ = RunAsync(proofPath);
+    }
+
+    private async Task RunAsync(string proofPath)
+    {
+        var mode = Environment.GetEnvironmentVariable("VIDRA_VELO_MODE") ?? "report";
+        var feed = Environment.GetEnvironmentVariable("VIDRA_VELO_FEED");
+
+        string? installed = null;
+        string? currentVersion = null;
+        string? availableVersion = null;
+        string? appliedVersion = null;
+        string? error = null;
+        var downloaded = false;
+        var staged = false;
+
+        try
+        {
+            var manager = feed is null ? null : new UpdateManager(feed);
+            if (manager is not null)
+            {
+                installed = manager.IsInstalled.ToString();
+                currentVersion = manager.CurrentVersion?.ToString();
+
+                if (mode == "update")
+                {
+                    var update = await manager.CheckForUpdatesAsync();
+                    if (update is not null)
+                    {
+                        availableVersion = update.TargetFullRelease?.Version?.ToString();
+                        await manager.DownloadUpdatesAsync(update);
+                        downloaded = true;
+                        // `restart: false` so the driver — not Velopack — decides
+                        // when the next launch happens and with which environment.
+                        manager.WaitExitThenApplyUpdates(update.TargetFullRelease, silent: true, restart: false);
+                        staged = true;
+                        appliedVersion = availableVersion;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"{ex.GetType().Name}: {ex.Message}";
+        }
+
+        var json = new StringBuilder("{\n");
+        Append(json, "mode", mode, first: true);
+        Append(json, "isInstalled", installed);
+        Append(json, "currentVersion", currentVersion);
+        Append(json, "availableVersion", availableVersion);
+        Append(json, "appliedVersion", appliedVersion);
+        Append(json, "payload", ReadPayload());
+        Append(json, "processPath", Environment.ProcessPath);
+        Append(json, "sqVersion", ReadSqVersion());
+        Append(json, "error", error);
+        json.Append(",\n  \"downloaded\": ").Append(downloaded ? "true" : "false");
+        json.Append(",\n  \"staged\": ").Append(staged ? "true" : "false");
+        json.Append("\n}\n");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(proofPath)!);
+        File.WriteAllText(proofPath, json.ToString());
+        Console.WriteLine(json.ToString());
+        Console.Out.Flush();
+
+        // Velopack's updater waits for this process to exit before swapping the
+        // app directory, so exiting *is* the last step of applying an update.
+        Environment.Exit(0);
+    }
+
+    /// <summary>
+    /// The payload file is what says which build is actually running, without
+    /// trusting either side's version bookkeeping. On macOS it rides in
+    /// <c>Contents/Resources</c>, on Windows next to the executable.
+    /// </summary>
+    private static string? ReadPayload()
+    {
+        foreach (var candidate in PayloadCandidates())
+        {
+            if (File.Exists(candidate)) return File.ReadAllText(candidate).Trim();
+        }
+        return null;
+    }
+
+    private static string? ReadSqVersion()
+    {
+        foreach (var candidate in PayloadCandidates("sq.version"))
+        {
+            if (File.Exists(candidate)) return File.ReadAllText(candidate).Trim();
+        }
+        return null;
+    }
+
+    private static IEnumerable<string> PayloadCandidates(string name = PayloadFile)
+    {
+        var dirs = new List<string?>
+        {
+            Path.GetDirectoryName(Environment.ProcessPath),
+            AppContext.BaseDirectory,
+        };
+
+        foreach (var dir in dirs)
+        {
+            if (string.IsNullOrEmpty(dir)) continue;
+            yield return Path.Combine(dir, name);
+            yield return Path.Combine(dir, "..", "Resources", name);
+            yield return Path.Combine(dir, "Contents", "Resources", name);
+        }
+    }
+
+    private static void Append(StringBuilder json, string key, string? value, bool first = false)
+    {
+        if (!first) json.Append(",\n");
+        json.Append("  \"").Append(key).Append("\": ");
+        if (value is null)
+        {
+            json.Append("null");
+            return;
+        }
+
+        json.Append('"');
+        foreach (var c in value)
+        {
+            json.Append(c switch
+            {
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                _ => c < ' ' ? $"\\u{(int)c:x4}" : c.ToString(),
+            });
+        }
+        json.Append('"');
+    }
+}
