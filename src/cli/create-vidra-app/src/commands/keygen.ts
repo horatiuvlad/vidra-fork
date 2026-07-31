@@ -83,7 +83,7 @@ export const keygenCommand = async (argv: string[]): Promise<void> => {
   console.log();
   console.log(
     value(
-      JSON.stringify({ vidra: { update: { publicKeys: [publicKey] } } }, null, 2)
+      JSON.stringify({ vidra: { updates: { publicKeys: [publicKey] } } }, null, 2)
         .split("\n")
         .map((line) => `    ${line}`)
         .join("\n"),

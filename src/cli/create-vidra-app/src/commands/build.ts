@@ -437,7 +437,7 @@ const stepCopyAssets = (project: ProjectInfo): void => {
 };
 
 /**
- * Stamps the app's `vidra.update` config into the bundle, so the host can read a
+ * Stamps the app's `vidra.updates` config into the bundle, so the host can read a
  * feed URL at startup without the developer writing any C#. Runs after the asset
  * copy because it writes into the same `Resources/Raw` directory.
  */

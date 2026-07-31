@@ -2,14 +2,14 @@ import path from "node:path";
 import fs from "fs-extra";
 
 /**
- * The `vidra.update` block of an app's own `package.json` — the single place a
+ * The `vidra.updates` block of an app's own `package.json` — the single place a
  * developer configures updates, next to the version the same file already owns.
  *
  * ```json
- * { "vidra": { "update": { "feedUrl": "https://updates.example.com/bundles.json" } } }
+ * { "vidra": { "updates": { "feedUrl": "https://updates.example.com/bundles.json" } } }
  * ```
  *
- * `vidra build` stamps it into the app bundle as `vidra-update.json`, which the
+ * `vidra build` stamps it into the app bundle as `vidra-updates.json`, which the
  * host reads at startup. No block means no feed, which means the updater does
  * nothing at all.
  */
@@ -29,7 +29,7 @@ export interface UpdateConfig {
 }
 
 /** The name the host looks for, as a MAUI app-package asset. */
-export const UPDATE_CONFIG_FILE = "vidra-update.json";
+export const UPDATE_CONFIG_FILE = "vidra-updates.json";
 
 export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {
   const pkgPath = path.join(projectRoot, "package.json");
@@ -42,10 +42,10 @@ export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {
     return null;
   }
 
-  const update = (pkg as { vidra?: { update?: unknown } })?.vidra?.update;
-  if (!update || typeof update !== "object") return null;
+  const updates = (pkg as { vidra?: { updates?: unknown } })?.vidra?.updates;
+  if (!updates || typeof updates !== "object") return null;
 
-  const raw = update as Record<string, unknown>;
+  const raw = updates as Record<string, unknown>;
   const config: UpdateConfig = {};
 
   if (typeof raw.feedUrl === "string" && raw.feedUrl.trim().length > 0) {

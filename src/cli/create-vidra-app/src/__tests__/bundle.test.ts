@@ -166,7 +166,7 @@ describe("feed manifest", () => {
   });
 });
 
-describe("vidra.update config", () => {
+describe("vidra.updates config", () => {
   const project = (pkg: unknown): string => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg));
@@ -177,7 +177,7 @@ describe("vidra.update config", () => {
     const root = project({
       name: "app",
       version: "1.0.0",
-      vidra: { update: { feedUrl: "https://example.com/bundles.json", channel: "beta" } },
+      vidra: { updates: { feedUrl: "https://example.com/bundles.json", channel: "beta" } },
     });
 
     expect(readUpdateConfig(root)).toEqual({
@@ -188,18 +188,18 @@ describe("vidra.update config", () => {
 
   it("treats a missing or empty block as no configuration", () => {
     expect(readUpdateConfig(project({ name: "app" }))).toBeNull();
-    expect(readUpdateConfig(project({ name: "app", vidra: { update: {} } }))).toBeNull();
-    expect(readUpdateConfig(project({ name: "app", vidra: { update: { feedUrl: "  " } } }))).toBeNull();
+    expect(readUpdateConfig(project({ name: "app", vidra: { updates: {} } }))).toBeNull();
+    expect(readUpdateConfig(project({ name: "app", vidra: { updates: { feedUrl: "  " } } }))).toBeNull();
   });
 
   it("reads a single publicKey and a publicKeys array", () => {
     const single = project({
       name: "app",
-      vidra: { update: { feedUrl: "https://e.com/b.json", publicKey: "AAA" } },
+      vidra: { updates: { feedUrl: "https://e.com/b.json", publicKey: "AAA" } },
     });
     const many = project({
       name: "app",
-      vidra: { update: { feedUrl: "https://e.com/b.json", publicKeys: ["AAA", "BBB"] } },
+      vidra: { updates: { feedUrl: "https://e.com/b.json", publicKeys: ["AAA", "BBB"] } },
     });
 
     expect(readUpdateConfig(single)?.publicKeys).toEqual(["AAA"]);
@@ -209,7 +209,7 @@ describe("vidra.update config", () => {
   });
 
   it("has no keys when none are configured, which is what allows an unsigned feed", () => {
-    const root = project({ name: "app", vidra: { update: { feedUrl: "https://e.com/b.json" } } });
+    const root = project({ name: "app", vidra: { updates: { feedUrl: "https://e.com/b.json" } } });
 
     expect(readUpdateConfig(root)?.publicKeys).toBeUndefined();
   });
@@ -225,7 +225,7 @@ describe("vidra.update config", () => {
   it("keeps an explicit enabled:false", () => {
     const root = project({
       name: "app",
-      vidra: { update: { feedUrl: "https://example.com/bundles.json", enabled: false } },
+      vidra: { updates: { feedUrl: "https://example.com/bundles.json", enabled: false } },
     });
 
     expect(readUpdateConfig(root)?.enabled).toBe(false);

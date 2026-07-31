@@ -8,8 +8,8 @@ namespace Vidra.Hosting;
 /// <remarks>
 /// Settings arrive from three places, most specific first: what
 /// <c>UseVidraUpdates(...)</c> sets in code, the <c>VIDRA_UPDATE_FEED_URL</c>
-/// environment variable, and <c>vidra-update.json</c> — which <c>vidra build</c>
-/// writes from the <c>vidra.update</c> block of the app's own
+/// environment variable, and <c>vidra-updates.json</c> — which <c>vidra build</c>
+/// writes from the <c>vidra.updates</c> block of the app's own
 /// <c>package.json</c>, so the usual case needs no C# at all.
 /// </remarks>
 public sealed class VidraUpdateOptions
@@ -21,7 +21,7 @@ public sealed class VidraUpdateOptions
     public const string StartupDelayEnvironmentVariable = "VIDRA_UPDATE_STARTUP_DELAY";
 
     /// <summary>Name of the stamped config file, as a MAUI app-package asset.</summary>
-    public const string ConfigFileName = "vidra-update.json";
+    public const string ConfigFileName = "vidra-updates.json";
 
     /// <summary>Absolute URL of <c>bundles.json</c>. Without one, nothing is checked.</summary>
     public string? FeedUrl { get; set; }

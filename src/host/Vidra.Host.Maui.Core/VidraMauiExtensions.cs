@@ -84,7 +84,7 @@ public static class VidraMauiExtensions
     /// Turns on over-the-air JS bundle updates. Call after <see cref="UseVidra"/>.
     /// </summary>
     /// <remarks>
-    /// With no arguments the app is configured by the <c>vidra.update</c> block in
+    /// With no arguments the app is configured by the <c>vidra.updates</c> block in
     /// its own <c>package.json</c>, which <c>vidra build</c> stamps into the
     /// bundle — no feed URL there means nothing is ever checked, so calling this
     /// unconditionally (as the template does) costs an app that does not want

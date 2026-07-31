@@ -24,7 +24,7 @@ builder
 ```json
 {
   "vidra": {
-    "update": {
+    "updates": {
       "feedUrl": "https://updates.example.com/bundles.json"
     }
   }
@@ -179,7 +179,7 @@ Add the public half to your app's `package.json` and rebuild:
 ```json
 {
   "vidra": {
-    "update": {
+    "updates": {
       "feedUrl": "https://updates.example.com/bundles.json",
       "publicKeys": ["MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE..."]
     }
