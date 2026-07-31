@@ -118,6 +118,43 @@ public sealed class UpdateClientTests : IDisposable
     }
 
     [Fact]
+    public async Task A_new_version_of_byte_identical_content_is_not_downloaded()
+    {
+        // What `npm version patch` with no source changes produces: the archive is
+        // deterministic, so the sha is unchanged while the entry looks new.
+        // Installing it would re-download what is already on disk and leave
+        // Current and Previous on one sha — which LiveBundles dedupes, arming a
+        // rollback with nowhere to roll back to.
+        var feed = PublishFeed(("1.1.0", Core, App));
+        var store = Store();
+        var entry = BundleManifest.Parse(await new FileBundleSource(feed).GetManifestAsync()).Bundles.Single();
+
+        store.SaveState(new UpdateState
+        {
+            Current = entry.Sha256,
+            CurrentVersion = entry.Version,
+            Installed = new Dictionary<string, BundleIdentity>(StringComparer.OrdinalIgnoreCase)
+            {
+                [entry.Sha256] = new(entry.Version, Core, App),
+            },
+        });
+
+        // The same archive, republished a version later.
+        File.WriteAllText(
+            Path.Combine(feed, "bundles.json"),
+            "{\n  \"schema\": 1,\n  \"bundles\": [\n"
+            + "    { \"version\": \"1.2.0\", \"url\": \"" + entry.Url + "\""
+            + ", \"sha256\": \"" + entry.Sha256 + "\", \"size\": " + entry.Size
+            + ", \"coreFingerprint\": \"" + Core + "\", \"appFingerprint\": \"" + App + "\" }\n  ]\n}\n");
+
+        var result = await new UpdateClient(store).CheckAsync(new FileBundleSource(feed), Request());
+
+        result.Outcome.Should().Be(UpdateCheckOutcome.NoUpdate);
+        result.Reason.Should().Contain("byte-identical");
+        store.LoadState().Pending.Should().BeNull();
+    }
+
+    [Fact]
     public async Task A_bundle_that_was_rolled_back_is_not_downloaded_again()
     {
         var feed = PublishFeed(("1.1.0", Core, App));

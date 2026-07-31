@@ -7,6 +7,24 @@ namespace Vidra.Updates;
 public sealed record BundleProbation(string Sha256, int Attempts);
 
 /// <summary>
+/// What a bundle was chosen against — its version and the two contract
+/// fingerprints of the host that accepted it.
+/// </summary>
+/// <remarks>
+/// Recorded per bundle rather than per slot. Three parallel sets of
+/// <c>Current*</c>/<c>Previous*</c>/<c>Pending*</c> fields would have to be moved
+/// in step by every transition, and the first one that forgets is a bundle
+/// carrying another bundle's identity.
+/// </remarks>
+public sealed record BundleIdentity(string Version, string CoreFingerprint, string AppFingerprint);
+
+/// <summary>
+/// The contracts of the binary that is running right now, and the version of the
+/// bundle it ships with.
+/// </summary>
+public sealed record HostContracts(string CoreFingerprint, string AppFingerprint, string? EmbeddedVersion);
+
+/// <summary>
 /// What the host knows about installed bundles, persisted as
 /// <c>vidra/bundles/state.json</c> in app data.
 /// </summary>
@@ -17,10 +35,24 @@ public sealed record BundleProbation(string Sha256, int Attempts);
 /// shipped bundle. <c>Blocked</c> remembers what has already failed, so a broken
 /// bundle is not downloaded and promoted again on the next check — without it,
 /// rollback is a loop.
+///
+/// <c>Installed</c> records what each bundle was chosen against, so a launch can
+/// ask whether the bundle it is about to serve is still compatible with the
+/// binary underneath it. Nothing else can answer that: the feed's fingerprints
+/// are consulted when an entry is selected, and a native update replaces the
+/// binary long after that.
 /// </remarks>
 public sealed record UpdateState
 {
-    public const int SupportedSchema = 1;
+    /// <summary>
+    /// Bumped to 2 when <see cref="Installed"/> arrived. A schema-1 document has
+    /// no identities, so nothing can vouch for the bundle it names — and
+    /// <see cref="Parse"/> already resolves anything it cannot read to
+    /// <see cref="Empty"/>, which serves the embedded copy. That normally costs
+    /// every install one launch on the shipped UI; it costs nothing here,
+    /// because no released version has ever written one.
+    /// </summary>
+    public const int SupportedSchema = 2;
 
     public static readonly UpdateState Empty = new();
 
@@ -40,8 +72,12 @@ public sealed record UpdateState
 
     public IReadOnlyList<string> Blocked { get; init; } = [];
 
+    /// <summary>What each known bundle was chosen against, keyed by its sha256.</summary>
+    public IReadOnlyDictionary<string, BundleIdentity> Installed { get; init; }
+        = new Dictionary<string, BundleIdentity>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Compares by value, including <see cref="Blocked"/>.
+    /// Compares by value, including <see cref="Blocked"/> and <see cref="Installed"/>.
     /// </summary>
     /// <remarks>
     /// A record's synthesized equality compares <see cref="Blocked"/> by
@@ -59,7 +95,10 @@ public sealed record UpdateState
             && Pending == other.Pending
             && PendingVersion == other.PendingVersion
             && Probation == other.Probation
-            && Blocked.SequenceEqual(other.Blocked, StringComparer.Ordinal);
+            && Blocked.SequenceEqual(other.Blocked, StringComparer.Ordinal)
+            && Installed.Count == other.Installed.Count
+            && Installed.All(pair =>
+                other.Installed.TryGetValue(pair.Key, out var theirs) && theirs == pair.Value);
 
     public override int GetHashCode()
     {
@@ -73,6 +112,14 @@ public sealed record UpdateState
         hash.Add(Probation);
         foreach (var sha in Blocked)
             hash.Add(sha, StringComparer.Ordinal);
+        // Folded into one value with XOR rather than added one by one: HashCode.Add
+        // is order-dependent, a dictionary's enumeration order is not part of its
+        // value, and two equal states must never hash differently.
+        var installed = 0;
+        foreach (var pair in Installed)
+            installed ^= HashCode.Combine(
+                pair.Key.GetHashCode(StringComparison.OrdinalIgnoreCase), pair.Value);
+        hash.Add(installed);
         return hash.ToHashCode();
     }
 
@@ -126,8 +173,29 @@ public sealed record UpdateState
                 }
             }
 
+            var installed = new Dictionary<string, BundleIdentity>(StringComparer.OrdinalIgnoreCase);
+            if (root.TryGetProperty("installed", out var installedElement)
+                && installedElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in installedElement.EnumerateObject())
+                {
+                    if (property.Value.ValueKind != JsonValueKind.Object) continue;
+
+                    var version = ReadString(property.Value, "version");
+                    var core = ReadString(property.Value, "coreFingerprint");
+                    var app = ReadString(property.Value, "appFingerprint");
+
+                    // A half-written identity cannot vouch for anything, so drop it
+                    // rather than record one that revalidation would have to guess at.
+                    if (version is null || core is null || app is null) continue;
+
+                    installed[property.Name] = new BundleIdentity(version, core, app);
+                }
+            }
+
             return new UpdateState
             {
+                Installed = installed,
                 Current = ReadString(root, "current"),
                 CurrentVersion = ReadString(root, "currentVersion"),
                 Previous = ReadString(root, "previous"),
@@ -171,6 +239,21 @@ public sealed record UpdateState
             json.Append(",\n  \"blocked\": [")
                 .Append(string.Join(", ", Blocked.Select(Quote)))
                 .Append(']');
+        }
+
+        if (Installed.Count > 0)
+        {
+            // Sorted, so the file a human opens twice looks the same twice.
+            var entries = Installed
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair =>
+                    $"\n    {Quote(pair.Key)}: {{ \"version\": {Quote(pair.Value.Version)}, "
+                    + $"\"coreFingerprint\": {Quote(pair.Value.CoreFingerprint)}, "
+                    + $"\"appFingerprint\": {Quote(pair.Value.AppFingerprint)} }}");
+
+            json.Append(",\n  \"installed\": {")
+                .Append(string.Join(",", entries))
+                .Append("\n  }");
         }
 
         json.Append("\n}\n");

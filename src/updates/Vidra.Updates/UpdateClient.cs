@@ -89,9 +89,27 @@ public sealed class UpdateClient(BundleStore store, BundleInstaller? installer =
                     state);
             }
 
+            // Same bytes, newer version number. A publisher who bumps the version
+            // without touching `ui/dist` produces exactly this: the archive is
+            // deterministic, so the sha is unchanged while the entry looks new.
+            // Installing it would re-download what is already on disk and leave
+            // Current and Previous on one sha — which LiveBundles dedupes, arming
+            // a rollback with nowhere to roll back to.
+            if (string.Equals(state.Current, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                return new UpdateCheckResult(
+                    UpdateCheckOutcome.NoUpdate,
+                    $"bundle {entry.Version} is byte-identical to the one already serving",
+                    entry,
+                    state);
+            }
+
             await _installer.InstallAsync(source, entry, ct).ConfigureAwait(false);
 
-            var updated = UpdateLifecycle.OnDownloaded(state, entry.Sha256, entry.Version);
+            var identity = new BundleIdentity(
+                entry.Version, request.CoreFingerprint, request.AppFingerprint);
+            var updated = UpdateLifecycle.ForgetUnreferenced(
+                UpdateLifecycle.OnDownloaded(state, entry.Sha256, identity));
             _store.SaveState(updated);
             _store.Prune(updated);
 

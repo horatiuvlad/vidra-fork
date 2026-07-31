@@ -140,6 +140,28 @@ Practically: **if you change a `[BridgeModule]`, `[BridgeEventContract]` or
 native release.** That is the intended behaviour, and `vidra bundle` prints the
 fingerprints so you can see when they move.
 
+### …and whether the bundle already installed still applies
+
+Both questions are asked when a bundle is chosen from the feed — which answers
+them against whichever binary was running at the time. Ship a native release that
+changes a contract, and the bundle a user already has was chosen against the
+*old* one: the same mismatch the fingerprints exist to prevent, arriving from the
+other direction.
+
+So the app records what each installed bundle was chosen against and rechecks it
+on every launch, before anything is promoted. A bundle whose fingerprints no
+longer match the running binary — or that is older than the one your native
+release shipped with — is set aside, and the embedded copy serves until a check
+finds a bundle built for the new contracts.
+
+Set aside, not blocked: nothing is wrong with that bundle, and rolling the native
+release back makes it installable again.
+
+A bundle whose contents are **byte-identical** to the one already serving is
+skipped too, whatever its version says. `vidra bundle` writes a deterministic
+archive, so an unchanged `ui/` republished under a new version has the same
+`sha256` — and downloading it again would gain nothing.
+
 ## What happens at runtime
 
 - **On launch**, before the WebView loads, the host promotes anything downloaded

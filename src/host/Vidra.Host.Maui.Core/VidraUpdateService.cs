@@ -60,10 +60,23 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
         try
         {
             _state = _store.LoadState();
-            var transition = UpdateLifecycle.OnStartup(_state);
-            _state = transition.State;
 
-            if (transition.Outcome != StartupOutcome.Unchanged)
+            // Before anything is promoted: can *this* binary still serve what we
+            // already have? Each bundle's fingerprints were checked when it was
+            // selected from the feed, and a native update since then may have
+            // moved the contracts underneath it.
+            var (revalidated, dropped) = UpdateLifecycle.Revalidate(_state, RunningHost());
+            if (dropped.Count > 0)
+            {
+                _state = revalidated;
+                Log($"dropped {dropped.Count} bundle(s) built against different contracts: "
+                    + string.Join(", ", dropped.Select(Short)));
+            }
+
+            var transition = UpdateLifecycle.OnStartup(_state);
+            _state = UpdateLifecycle.ForgetUnreferenced(transition.State);
+
+            if (transition.Outcome != StartupOutcome.Unchanged || dropped.Count > 0)
             {
                 _store.SaveState(_state);
                 _store.Prune(_state);
@@ -303,6 +316,18 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
     /// until something has been installed. <c>AppInfo</c> reads it from the app
     /// manifest, which <c>vidra build</c> stamps from the app's package.json.
     /// </summary>
+    /// <summary>
+    /// The contracts of the binary running right now. Safe to read here because
+    /// <c>VidraContractWarmup</c> has already resolved the dispatcher — read any
+    /// earlier and the fingerprint is a hash of a partial manifest and looks
+    /// perfectly valid.
+    /// </summary>
+    private static HostContracts RunningHost()
+        => new(
+            BridgeContractRegistry.Fingerprint(BridgeManifestScope.Core),
+            BridgeContractRegistry.Fingerprint(BridgeManifestScope.App),
+            EmbeddedVersion());
+
     private static string? EmbeddedVersion()
     {
         try
