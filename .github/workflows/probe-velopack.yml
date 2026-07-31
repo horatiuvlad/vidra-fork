@@ -184,14 +184,23 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
+          # Depth 1 only. The publish also leaves per-RID intermediates at
+          # `maccatalyst-x64/` and `maccatalyst-arm64/`; the bundle `vidra build`
+          # signs and ships in the DMG is the lipo'd one at the root, and the
+          # intermediates are neither signed nor complete. Reaching one run of
+          # this probe with the x64 intermediate is what produced "vpk cannot
+          # write Contents/Resources/sq.version".
           root="src/${{ env.PROJECT }}.Host/bin/Release/net10.0-maccatalyst"
-          app="$(find "$root" -maxdepth 2 -name '*.app' -type d -print -quit)"
+          app="$(find "$root" -maxdepth 1 -name '*.app' -type d -print -quit)"
           [ -n "$app" ] || { echo "::error::no .app under $root"; exit 1; }
           echo "APP=$PWD/$app" >> "$GITHUB_ENV"
           bin="$app/Contents/MacOS/$(ls "$app/Contents/MacOS" | head -1)"
           echo "MAIN_EXE=$(basename "$bin")" >> "$GITHUB_ENV"
           echo "==> $app  (mainExe: $(basename "$bin"))"
           lipo -archs "$bin" || file "$bin"
+          echo "---- Contents/ ----"; ls -la "$app/Contents"
+          echo "---- other .app directories in the tree ----"
+          find "$root" -name '*.app' -type d -maxdepth 2
 
       # ---- Question 1: signing ----
       #
@@ -528,6 +537,10 @@ jobs:
         run: |
           feed="${{ runner.temp }}/feed"
           rm -rf "$feed"; mkdir -p "$feed"
+          # `vpk pack` overwrites Setup.exe in the output directory on every
+          # release, so the 1.0.0 installer has to be taken before 1.0.1 is
+          # packed — otherwise "installing 1.0.0" silently installs 1.0.1 and
+          # the round-trip has nothing left to prove.
           for v in 1.0.0 1.0.1; do
             stage="${{ runner.temp }}/stage-$v"
             rm -rf "$stage"
@@ -537,19 +550,64 @@ jobs:
               --packDir "$(cygpath -w "$stage")" \
               --mainExe "${{ env.PROJECT }}.Host.exe" \
               --outputDir "$(cygpath -w "$feed")"
+            if [ "$v" = "1.0.0" ]; then
+              cp "$feed/${{ env.PACK_ID }}-win-Setup.exe" "${{ runner.temp }}/Setup-1.0.0.exe"
+            fi
           done
           echo "==== feed contents ===="
           ls -la "$feed"
           cat "$feed"/releases*.json || true
 
+      # Question 1, Windows half. `vidra build` signs one file — the app's own
+      # .exe — because that is all a self-contained ZIP really exposes.
+      # Velopack signs everything it packages, including its own Update.exe and
+      # Setup.exe, and those are the binaries SmartScreen actually judges.
+      - name: Scenario W — vpk pack --signParams (Authenticode)
+        shell: bash
+        run: |
+          set -x
+          out="${{ runner.temp }}/packW"
+          rm -rf "$out"; mkdir -p "$out"
+          vpk pack --packId ${{ env.PACK_ID }}.signed --packVersion 1.0.0 \
+            --packDir "$PUBLISH_DIR" \
+            --mainExe "${{ env.PROJECT }}.Host.exe" \
+            --outputDir "$(cygpath -w "$out")" \
+            --signParams "/sha1 $VIDRA_WINDOWS_CERT_THUMBPRINT /fd SHA256" \
+            || echo "::warning::vpk pack (W) failed"
+          set +x
+          ls -la "$out" || true
+          exit 0
+
+      - name: Did the signature reach Setup.exe and Update.exe
+        if: always()
+        shell: pwsh
+        run: |
+          $out = "${{ runner.temp }}/packW"
+          if (-not (Test-Path $out)) { Write-Host "::warning::no packW output"; exit 0 }
+          foreach ($f in Get-ChildItem $out -Filter "*Setup.exe") {
+            Write-Host "---- $($f.Name)"
+            Get-AuthenticodeSignature $f.FullName | Format-List Status,StatusMessage,SignerCertificate
+          }
+          # Update.exe rides inside the release package, which is where the
+          # updater that replaces the app on every future release comes from.
+          $nupkg = Get-ChildItem $out -Filter "*-full.nupkg" | Select-Object -First 1
+          if ($nupkg) {
+            $dest = "${{ runner.temp }}/packW-unpacked"
+            Expand-Archive -Path $nupkg.FullName -DestinationPath $dest -Force
+            Get-ChildItem -Recurse $dest -Include "Update.exe","${{ env.PROJECT }}.Host.exe" |
+              ForEach-Object {
+                Write-Host "---- $($_.FullName)"
+                Get-AuthenticodeSignature $_.FullName | Format-List Status,SignerCertificate
+              }
+          }
+          exit 0
+
       - name: Install 1.0.0 with the generated Setup.exe
         timeout-minutes: 15
         shell: pwsh
         run: |
-          $feed = "${{ runner.temp }}/feed"
-          Get-ChildItem $feed | Format-Table Name,Length
-          $setup = Get-ChildItem $feed -Filter "*Setup.exe" | Select-Object -First 1
-          if (-not $setup) { Write-Host "::warning::no Setup.exe produced"; exit 0 }
+          $setup = Get-Item "${{ runner.temp }}/Setup-1.0.0.exe" -ErrorAction SilentlyContinue
+          if (-not $setup) { Write-Host "::warning::no 1.0.0 Setup.exe was captured"; exit 0 }
           Write-Host "running $($setup.FullName) --silent"
           $p = Start-Process -FilePath $setup.FullName -ArgumentList "--silent" -PassThru -Wait
           Write-Host "setup exit code: $($p.ExitCode)"

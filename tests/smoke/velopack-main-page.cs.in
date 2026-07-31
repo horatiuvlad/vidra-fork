@@ -80,6 +80,10 @@ public class MainPage : VidraPage
         Append(json, "appliedVersion", appliedVersion);
         Append(json, "payload", ReadPayload());
         Append(json, "processPath", Environment.ProcessPath);
+        // Question 5's only genuinely empirical part: whether Velopack replacing
+        // the app directory takes the OTA tier's state with it. It does not if
+        // MAUI puts app data outside the install root — so record where that is.
+        Append(json, "appDataDirectory", TryAppData());
         Append(json, "sqVersion", ReadSqVersion());
         Append(json, "error", error);
         json.Append(",\n  \"downloaded\": ").Append(downloaded ? "true" : "false");
@@ -108,6 +112,12 @@ public class MainPage : VidraPage
             if (File.Exists(candidate)) return File.ReadAllText(candidate).Trim();
         }
         return null;
+    }
+
+    private static string? TryAppData()
+    {
+        try { return FileSystem.AppDataDirectory; }
+        catch (Exception ex) { return $"error:{ex.GetType().Name}"; }
     }
 
     private static string? ReadSqVersion()
