@@ -16,6 +16,17 @@ public interface IVidraUpdates
     /// <summary>A bundle downloaded and waiting for the next launch.</summary>
     string? PendingVersion { get; }
 
+    /// <summary>
+    /// The most recent check, or <see langword="null"/> if none has finished yet.
+    /// </summary>
+    /// <remarks>
+    /// "Nothing was staged" and "the check has not come back" look identical
+    /// without this — to an app deciding whether to show an update prompt, and to
+    /// a test waiting for a verdict, which otherwise has no choice but to wait
+    /// out its whole timeout on every negative case.
+    /// </remarks>
+    UpdateCheckResult? LastCheck { get; }
+
     /// <summary>Checks the feed now. Safe to call at any time; never throws for a network failure.</summary>
     Task<UpdateCheckResult> CheckNowAsync(CancellationToken ct = default);
 }
@@ -36,6 +47,8 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
     public string? CurrentVersion => _state.CurrentVersion;
 
     public string? PendingVersion => _state.PendingVersion;
+
+    public UpdateCheckResult? LastCheck { get; private set; }
 
     /// <summary>
     /// Runs before the first page is built. Promotion, rollback and choosing the
@@ -95,11 +108,17 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
         await LoadStampedConfigAsync().ConfigureAwait(false);
 
         if (!options.Enabled)
-            return new UpdateCheckResult(UpdateCheckOutcome.NoUpdate, "updates are disabled");
+        {
+            LastCheck = new UpdateCheckResult(UpdateCheckOutcome.NoUpdate, "updates are disabled");
+            return LastCheck;
+        }
 
         var source = ResolveSource();
         if (source is null)
-            return new UpdateCheckResult(UpdateCheckOutcome.NoUpdate, "no update feed is configured");
+        {
+            LastCheck = new UpdateCheckResult(UpdateCheckOutcome.NoUpdate, "no update feed is configured");
+            return LastCheck;
+        }
 
         var request = new UpdateCheckRequest
         {
@@ -128,6 +147,7 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
         if (result.State is not null)
             _state = result.State;
 
+        LastCheck = result;
         Log(result.Reason);
 
         if (source is IDisposable disposable && !ReferenceEquals(source, options.Source))
@@ -151,7 +171,7 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
 
         try
         {
-            await Task.Delay(options.StartupDelay, ct).ConfigureAwait(false);
+            await Task.Delay(StartupDelay(), ct).ConfigureAwait(false);
             await CheckNowAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -172,6 +192,13 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
 
         bridge.BundleBooted += ConfirmBoot;
     }
+
+    private TimeSpan StartupDelay()
+        => int.TryParse(
+            Environment.GetEnvironmentVariable(VidraUpdateOptions.StartupDelayEnvironmentVariable),
+            out var seconds) && seconds >= 0
+                ? TimeSpan.FromSeconds(seconds)
+                : options.StartupDelay;
 
     /// <summary>The environment wins, so a test or a staging build can redirect the feed.</summary>
     private string? ConfiguredFeedUrl()

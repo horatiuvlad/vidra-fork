@@ -55,9 +55,12 @@ public class MainPage : VidraPage
                 }
             }
 
-            // Done as soon as there is nothing left to wait for: a bundle staged
-            // for next launch, or a page that has proved it works.
-            if (updates?.PendingVersion is not null && counter is not null)
+            // Done as soon as the check has reported *something* — staged, refused,
+            // nothing to do. Waiting for a pending version instead means every
+            // negative case (a refused signature, an incompatible bundle) sits
+            // here until the deadline, which is where this test spent most of
+            // its ten minutes.
+            if (updates?.LastCheck is not null && counter is not null)
                 break;
         }
 
@@ -67,6 +70,7 @@ public class MainPage : VidraPage
         Append(json, "currentVersion", updates?.CurrentVersion);
         Append(json, "currentBundle", updates?.CurrentBundle);
         Append(json, "pendingVersion", updates?.PendingVersion);
+        Append(json, "lastCheck", updates?.LastCheck?.Reason);
         Append(json, "appData", FileSystem.AppDataDirectory);
         Append(json, "coreFingerprint", Fingerprint(BridgeManifestScope.Core));
         Append(json, "appFingerprint", Fingerprint(BridgeManifestScope.App));

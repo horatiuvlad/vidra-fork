@@ -299,6 +299,9 @@ function launch(name, { timeout = 60 } = {}) {
       ...process.env,
       VIDRA_OTA_PROOF: proofPath,
       VIDRA_OTA_TIMEOUT: String(timeout),
+      // The check is what each phase is waiting for; there is nothing to gain
+      // from the production delay in a test that launches the app eleven times.
+      VIDRA_UPDATE_STARTUP_DELAY: "1",
     },
     timeout: (timeout + 45) * 1000,
     encoding: "utf8",

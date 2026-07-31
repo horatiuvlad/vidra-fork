@@ -17,6 +17,9 @@ public sealed class VidraUpdateOptions
     public const string FeedUrlEnvironmentVariable = "VIDRA_UPDATE_FEED_URL";
     public const string ChannelEnvironmentVariable = "VIDRA_UPDATE_CHANNEL";
 
+    /// <summary>Overrides <see cref="StartupDelay"/>, in seconds. Test and staging aid.</summary>
+    public const string StartupDelayEnvironmentVariable = "VIDRA_UPDATE_STARTUP_DELAY";
+
     /// <summary>Name of the stamped config file, as a MAUI app-package asset.</summary>
     public const string ConfigFileName = "vidra-update.json";
 
