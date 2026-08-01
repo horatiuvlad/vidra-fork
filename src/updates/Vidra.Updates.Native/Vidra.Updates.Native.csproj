@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One package, three target frameworks.
+
+    `net10.0` is the whole point of the split: the Mac Catalyst locator and the
+    config resolution are plain .NET with no MAUI and no UIKit, so they compile
+    and unit-test on the Linux leg in milliseconds. That TFM ships on every host
+    — including Windows and macOS — because it is what the test project
+    references and what keeps the interesting half out of the slow loop.
+
+    The two platform TFMs add the MAUI glue (Maui/**): the builder call, the
+    background check, the startup service. `UseMaui` and the MAUI package
+    reference are conditioned on the *target platform identifier* rather than
+    set unconditionally — during the outer, multi-targeting build
+    `$(TargetFramework)` is empty, so a naive `!= 'net10.0'` test would turn
+    MAUI on for a build that has no platform at all.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('osx'))">net10.0;net10.0-maccatalyst</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0;net10.0-windows10.0.19041.0</TargetFrameworks>
+
+    <UseMaui Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' != ''">true</UseMaui>
+    <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
+
+    <RootNamespace>Vidra.Updates.Native</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <PackageId>Vidra.Updates.Native</PackageId>
+    <Description>Native application updates for Vidra apps, via Velopack — including the Mac Catalyst locator Velopack does not ship.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Pinned, not floating. The locator below reproduces Velopack's own install
+      layout; that layout is not part of anything they call a breaking change,
+      so a minor bump is exactly the event the conformance test exists to catch
+      — and it should be caught by a deliberate upgrade, not by a restore.
+    -->
+    <PackageReference Include="Velopack" Version="1.2.0" />
+    <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)"
+                      Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' != ''" />
+  </ItemGroup>
+
+  <!-- The MAUI glue exists only where MAUI does. -->
+  <ItemGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == ''">
+    <Compile Remove="Maui\**" />
+  </ItemGroup>
+
+</Project>

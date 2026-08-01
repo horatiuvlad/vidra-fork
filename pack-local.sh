@@ -30,6 +30,12 @@ dotnet pack "$SCRIPT_DIR/src/bridge/Vidra.Bridge/Vidra.Bridge.csproj" \
 dotnet pack "$SCRIPT_DIR/src/updates/Vidra.Updates/Vidra.Updates.csproj" \
   -c Release -o "$OUT_DIR"
 
+# Multi-targeted: the plain net10.0 half packs on every OS, the platform half
+# only on its own. release-nuget.yml merges the per-OS results and the net10.0
+# assets are byte-identical on both, so the union is well defined.
+dotnet pack "$SCRIPT_DIR/src/updates/Vidra.Updates.Native/Vidra.Updates.Native.csproj" \
+  -c Release -o "$OUT_DIR"
+
 dotnet pack "$SCRIPT_DIR/src/modules/Vidra.Modules.FileSystem/Vidra.Modules.FileSystem.csproj" \
   -c Release -o "$OUT_DIR"
 
