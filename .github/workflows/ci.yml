@@ -85,6 +85,7 @@ jobs:
           dotnet restore tests/dotnet/Vidra.Modules.Windowing.Tests/Vidra.Modules.Windowing.Tests.csproj
           dotnet restore tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj
           dotnet restore tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj
+          dotnet restore tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj
 
       - name: Build C# test projects
         run: |
@@ -95,6 +96,7 @@ jobs:
           dotnet build tests/dotnet/Vidra.Modules.Windowing.Tests/Vidra.Modules.Windowing.Tests.csproj -c Release --no-restore
           dotnet build tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj -c Release --no-restore
           dotnet build tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj -c Release --no-restore
+          dotnet build tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj -c Release --no-restore
 
       - name: Run Vidra.Bridge.Tests
         run: dotnet test tests/dotnet/Vidra.Bridge.Tests/Vidra.Bridge.Tests.csproj -c Release --no-build --logger "trx;LogFileName=bridge.trx"
@@ -125,6 +127,14 @@ jobs:
       # app on the per-OS legs.
       - name: Run Vidra.Updates.Tests
         run: dotnet test tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj -c Release --no-build --logger "trx;LogFileName=updates.trx"
+
+      # The Mac Catalyst locator and the native config resolution are plain
+      # .NET — a locator is a function of a process path and the files under it
+      # — so both are decided here in milliseconds. The conformance test in the
+      # same project needs a real Mac and skips itself; it runs on the macOS
+      # leg, where Velopack's own locator can be constructed to compare against.
+      - name: Run Vidra.Updates.Native.Tests
+        run: dotnet test tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj -c Release --no-build --logger "trx;LogFileName=updates-native.trx"
 
       # ---- TypeScript SDK ----
       - name: Install SDK dependencies
@@ -295,6 +305,21 @@ jobs:
         env:
           VIDRA_SMOKE_CONFIG: Release
         run: node tests/smoke/echo-ping.mjs
+
+      # ---- Locator conformance (macOS only, no MAUI workload needed) ----
+      #
+      # Vidra ships its own IVelopackLocator because Velopack's client does not
+      # enumerate Mac Catalyst. The objection to owning one is that it encodes
+      # an install layout Velopack can change without calling it breaking, so
+      # this asserts ours answers exactly what `OsxVelopackLocator` answers over
+      # the same fixture bundle. It has to run here rather than on Linux for the
+      # same reason the locator exists: theirs refuses to construct off macOS.
+      - name: Locator conformance against Velopack's own (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dotnet test tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj \
+            -c Release --logger "trx;LogFileName=updates-native-macos.trx"
 
       # ---- Template build smoke (requires MAUI workload) ----
       #
