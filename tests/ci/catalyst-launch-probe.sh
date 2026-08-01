@@ -25,7 +25,8 @@ echo "--- MonoBundle: $(ls "$APP/Contents/MonoBundle" | wc -l | tr -d ' ') entri
      "$(ls "$APP/Contents/MonoBundle" | grep -c '\.dll$') dll," \
      "$(ls "$APP/Contents/MonoBundle" | grep -c '\.dylib$') dylib," \
      "$(ls "$APP/Contents/MonoBundle" | grep -c 'aotdata') aotdata"
-ls "$APP/Contents/MonoBundle" | grep -iE 'velopack|vidra' | sed 's/^/      /'
+echo "--- MonoBundle, in full:"
+ls "$APP/Contents/MonoBundle" | sed 's/^/      /'
 
 run() {
   local label="$1" app="$2"
@@ -45,6 +46,15 @@ run() {
   # The line that names the failure, if mono left one anywhere in the output.
   grep -iE 'error|fail|cannot|unable|not found|assert' "$log" | head -10 | sed 's/^/      /'
   sed -n '1,12p' "$log" | sed 's/^/      /'
+
+  # mono's fatal g_log goes to os_log, not to stderr — which is why the crash
+  # dump carries a native stack and nothing about why. The unified log has the
+  # actual message.
+  echo "      ---- os_log ----"
+  log show --last 2m --style compact \
+    --predicate "process == \"$MAIN_EXE\"" 2>/dev/null \
+    | grep -viE '^Timestamp|^Filtering|^Skipping' \
+    | tail -40 | sed 's/^/      /' | tee "$WORK/$label.oslog"
   return 1
 }
 

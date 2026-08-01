@@ -126,6 +126,28 @@ jobs:
             "$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -maxdepth 1 -name '*.app' -type d -print -quit)" \
             "${{ runner.temp }}/probe/3-full"
 
+      # A workaround if it works, and evidence about the mechanism either way:
+      # the Catalyst managed linker is what decides which assemblies reach
+      # MonoBundle, and Release is the only configuration that runs it.
+      - name: 4 — the same build with the managed linker off
+        timeout-minutes: 20
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node -e "
+            const fs = require('fs');
+            const file = 'src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj';
+            const xml = fs.readFileSync(file, 'utf8');
+            fs.writeFileSync(file, xml.replace(
+              '</PropertyGroup>',
+              '  <MtouchLink Condition=\"\$([MSBuild]::GetTargetPlatformIdentifier(\$(TargetFramework))) == \\'maccatalyst\\'\">None</MtouchLink>\n  </PropertyGroup>'));
+          "
+          grep -n "MtouchLink" "src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj"
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" build --target macos
+          bash "$GITHUB_WORKSPACE/tests/ci/catalyst-launch-probe.sh" \
+            "$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -maxdepth 1 -name '*.app' -type d -print -quit)" \
+            "${{ runner.temp }}/probe/4-no-linker"
+
       - name: Upload probe records
         if: always()
         uses: actions/upload-artifact@v4
