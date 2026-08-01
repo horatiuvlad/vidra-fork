@@ -148,6 +148,30 @@ jobs:
             "$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -maxdepth 1 -name '*.app' -type d -print -quit)" \
             "${{ runner.temp }}/probe/4-no-linker"
 
+      # os_log finally said it: "Failed to load AOT module
+      # 'Vidra.Modules.Essentials' while running in aot-only mode because a
+      # dependency cannot be found or **it is out of date**." Adding a package
+      # reference changes the dependency graph, and the incremental build reuses
+      # the AOT image compiled against the old one. If that is the whole story,
+      # a clean build launches — and every round above was measuring the rig.
+      - name: 5 — the same source, built clean
+        timeout-minutes: 25
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node -e "
+            const fs = require('fs');
+            const file = 'src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj';
+            fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(
+              /\n *<MtouchLink Condition=\"\\\$\(\[MSBuild\]::GetTargetPlatformIdentifier\(\\\$\(TargetFramework\)\)\) == 'maccatalyst'\">None<\/MtouchLink>/, ''));
+          "
+          grep -c "MtouchLink" "src/${{ env.PROJECT }}.Host/${{ env.PROJECT }}.Host.csproj"
+          rm -rf "src/${{ env.PROJECT }}.Host/bin" "src/${{ env.PROJECT }}.Host/obj"
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" build --target macos
+          bash "$GITHUB_WORKSPACE/tests/ci/catalyst-launch-probe.sh" \
+            "$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -maxdepth 1 -name '*.app' -type d -print -quit)" \
+            "${{ runner.temp }}/probe/5-clean"
+
       - name: Upload probe records
         if: always()
         uses: actions/upload-artifact@v4
