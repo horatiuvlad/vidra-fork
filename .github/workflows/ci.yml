@@ -745,6 +745,22 @@ jobs:
           diff <(cd "$built" && find . | sort) <(cd "$packed" && find . | sort) | head -40
           exit 0
 
+      # The bundles above are identical apart from three files and a fresh
+      # signature, and both verify strictly — so the reason one launches and the
+      # other does not is not visible by inspection. Apply the transformations
+      # one at a time instead and see which one stops the app booting.
+      - name: Which packing step stops the app from launching (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          built="$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -maxdepth 1 -name '*.app' -type d -print -quit)"
+          bash "$GITHUB_WORKSPACE/tests/ci/macos-packed-launch-bisect.sh" \
+            "$built" \
+            "$PWD/src/VidraSmoke.Host/Entitlements.plist" \
+            "${{ runner.temp }}/bisect"
+
       - name: Build and pack 1.0.1
         timeout-minutes: 25
         shell: bash
