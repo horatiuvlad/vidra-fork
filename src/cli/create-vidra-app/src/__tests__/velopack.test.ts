@@ -34,6 +34,17 @@ describe("packArgs", () => {
     ]);
   });
 
+  /**
+   * macOS renames the bundle to `<packTitle ?? packId>.app`. Passing the title
+   * is the difference between shipping `Notes.app` and `com.example.notes.app`.
+   */
+  it("passes the display name that becomes the .app's name", () => {
+    const args = packArgs({ ...base, packTitle: "Notes" });
+
+    expect(args[args.indexOf("--packTitle") + 1]).toBe("Notes");
+    expect(packArgs(base)).not.toContain("--packTitle");
+  });
+
   it("leaves the channel out so Velopack's own default applies", () => {
     expect(packArgs({ ...base, channel: null })).not.toContain("--channel");
     expect(packArgs({ ...base, channel: "osx" })).toEqual(

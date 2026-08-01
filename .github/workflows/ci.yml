@@ -715,6 +715,36 @@ jobs:
             cp dist/VidraSmoke-1.0.0-Setup.exe "${{ runner.temp }}/Setup-1.0.0.exe"
           fi
 
+      # What `vpk pack` did to the bundle, recorded rather than reasoned about.
+      # The first Catalyst round-trip died inside the mono runtime before any
+      # managed code ran, and the difference between the bundle that launches
+      # and the one that does not is somewhere in here.
+      - name: What packing changed about the bundle (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          set +e
+          built="$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -maxdepth 1 -name '*.app' -type d -print -quit)"
+          packed="$NATIVE_EXE"
+          echo "built:  $built"
+          echo "packed: $packed"
+
+          for label in built packed; do
+            if [ "$label" = built ]; then app="$built"; else app="$packed"; fi
+            echo "======== $label: $app"
+            echo "-- counts: $(find "$app" -type f | wc -l) files, $(find "$app" -type l | wc -l) symlinks"
+            echo "-- symlinks:"; find "$app" -type l | sed "s|$app/||" | sort | head -30
+            echo "-- Contents:"; ls -la "$app/Contents"
+            echo "-- codesign:"; codesign -dv --verbose=2 "$app" 2>&1 | head -8
+            echo "-- verify:"; codesign --verify --strict "$app" 2>&1 | head -5
+            echo "-- verify --deep:"; codesign --verify --deep --strict "$app" 2>&1 | head -5
+          done
+
+          echo "======== present in the built bundle, missing from the packed one"
+          diff <(cd "$built" && find . | sort) <(cd "$packed" && find . | sort) | head -40
+          exit 0
+
       - name: Build and pack 1.0.1
         timeout-minutes: 25
         shell: bash

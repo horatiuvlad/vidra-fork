@@ -254,6 +254,11 @@ async function launch(label, env) {
       // makes a local feed testable without rebuilding the app.
       VIDRA_NATIVE_UPDATE_FEED_URL: feedUrl,
       VIDRA_NATIVE_UPDATE_STARTUP_DELAY: "0",
+      // A Catalyst app that dies inside the mono runtime prints a native
+      // stack trace and nothing about *why* — the message goes to os_log.
+      // These route it to stderr, where the tail below can show it.
+      MONO_LOG_LEVEL: "debug",
+      MONO_LOG_MASK: "aot,asm,dll",
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -284,7 +289,19 @@ async function launch(label, env) {
   return parsed;
 }
 
+/**
+ * The last 60 lines, plus anything that looks like a cause.
+ *
+ * A mono crash dump is ~55 lines of native stack, so a plain tail pushes the
+ * one line explaining the abort off the top — which is exactly what happened
+ * the first time a Catalyst app failed to boot here.
+ */
 function tail(file) {
   if (!fs.existsSync(file)) return "(no output captured)";
-  return fs.readFileSync(file, "utf8").split(/\r?\n/).slice(-60).join("\n");
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+  const causes = lines.filter((l) =>
+    /error|fail|cannot|unable|not found|assert|exception|\* Assertion/i.test(l),
+  );
+  const head = causes.length ? ["---- lines that look like a cause ----", ...causes.slice(0, 30), ""] : [];
+  return [...head, "---- tail ----", ...lines.slice(-60)].join("\n");
 }

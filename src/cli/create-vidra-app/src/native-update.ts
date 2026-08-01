@@ -37,6 +37,7 @@ export const entitlementsCopyName = (packId: string): string => `${packId}.entit
 
 export interface NativeUpdateSettings {
   packId: string;
+  packTitle: string | null;
   packVersion: string;
   feedUrl: string | null;
   channel: string | null;
@@ -69,17 +70,23 @@ export const resolveNativeUpdateSettings = (opts: {
   const packId =
     config.packId ?? readApplicationId(opts.csprojPath) ?? opts.projectName;
 
+  // Not cosmetic on macOS: `vpk pack` renames the bundle to
+  // `<packTitle ?? packId>.app`, so without this the app a user drags to
+  // /Applications is called `com.example.notes.app`.
+  const packTitle = readApplicationTitle(opts.csprojPath) ?? opts.projectName;
+
   if (!config.feedUrl) {
     // Not fatal on its own: a build can produce a release the developer uploads
     // by hand. But the *app* cannot check a feed it was never told about, so a
     // build that packs without one produces an installer that never updates —
     // which is exactly the silent half-configured state `vidra doctor` exists
     // to catch.
-    return { packId, packVersion: opts.version, feedUrl: null, channel: config.channel ?? null };
+    return { packId, packTitle, packVersion: opts.version, feedUrl: null, channel: config.channel ?? null };
   }
 
   return {
     packId,
+    packTitle,
     packVersion: opts.version,
     feedUrl: config.feedUrl,
     channel: config.channel ?? null,
@@ -87,10 +94,17 @@ export const resolveNativeUpdateSettings = (opts: {
 };
 
 /** `<ApplicationId>` out of the host csproj. */
-export const readApplicationId = (csprojPath: string): string | null => {
+export const readApplicationId = (csprojPath: string): string | null =>
+  readCsprojProperty(csprojPath, "ApplicationId");
+
+/** `<ApplicationTitle>` out of the host csproj — the app's display name. */
+export const readApplicationTitle = (csprojPath: string): string | null =>
+  readCsprojProperty(csprojPath, "ApplicationTitle");
+
+const readCsprojProperty = (csprojPath: string, name: string): string | null => {
   if (!fs.existsSync(csprojPath)) return null;
   const xml = fs.readFileSync(csprojPath, "utf-8");
-  return xml.match(/<ApplicationId>([^<]+)<\/ApplicationId>/)?.[1]?.trim() || null;
+  return new RegExp(`<${name}>([^<]+)</${name}>`).exec(xml)?.[1]?.trim() || null;
 };
 
 /**
@@ -180,6 +194,7 @@ export const runNativeUpdate = (opts: {
   const args = packArgs({
     packId: opts.settings.packId,
     packVersion: opts.settings.packVersion,
+    packTitle: opts.settings.packTitle,
     packDir: opts.packDir,
     mainExe,
     outputDir: releaseDir,
