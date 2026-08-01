@@ -1,0 +1,148 @@
+// Runtime proof for the native-update round-trip, used only by CI.
+//
+// Replaces the scaffolded app's MainPage. One launch = one JSON proof read out
+// of the running app, then exit — because "an update was applied" is a claim
+// about a *sequence* of launches and cannot be observed from one.
+//
+// Unlike the throwaway probe this replaced, it drives Vidra's own surface —
+// `IVidraNativeUpdates`, resolved from DI — rather than Velopack directly. What
+// is under test is the glue: the locator, the config resolution, the builder
+// call, and the entry point. Velopack itself is already known to work.
+//
+// VIDRA_NATIVE_MODE:
+//   report   what the app believes is installed, and which payload is on disk
+//   update   check the feed, download, and stage for the next launch
+//
+// Without VIDRA_NATIVE_PROOF set it behaves like the normal template page.
+
+using System.Text;
+using Vidra.Hosting;
+
+namespace __PROJECT_NAMESPACE__;
+
+public class MainPage : VidraPage
+{
+    /// <summary>
+    /// A file whose contents only one build carries. Version numbers are
+    /// bookkeeping that both sides could agree on while nothing was replaced;
+    /// this says the bytes actually moved.
+    /// </summary>
+    private const string PayloadFile = "native-payload.txt";
+
+    private readonly IVidraNativeUpdates? _updates =
+        IPlatformApplication.Current?.Services.GetService<IVidraNativeUpdates>();
+
+    public MainPage()
+    {
+        var proofPath = Environment.GetEnvironmentVariable("VIDRA_NATIVE_PROOF");
+        if (string.IsNullOrEmpty(proofPath))
+            return;
+
+        _ = RunAsync(proofPath);
+    }
+
+    private async Task RunAsync(string proofPath)
+    {
+        var mode = Environment.GetEnvironmentVariable("VIDRA_NATIVE_MODE") ?? "report";
+        string? error = null;
+        NativeUpdateCheckResult? check = null;
+
+        try
+        {
+            if (_updates is null)
+            {
+                error = "IVidraNativeUpdates was not registered — UseVidraNativeUpdates() never ran";
+            }
+            else if (mode == "update")
+            {
+                // ApplyOnExit is on by default, so a downloaded release is
+                // handed to the updater here and applied when this process
+                // exits a few lines below.
+                check = await _updates.CheckNowAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"{ex.GetType().Name}: {ex.Message}";
+        }
+
+        var json = new StringBuilder("{\n");
+        Append(json, "mode", mode, first: true);
+        Append(json, "isInstalled", _updates?.IsInstalled.ToString());
+        Append(json, "currentVersion", _updates?.CurrentVersion);
+        Append(json, "pendingVersion", _updates?.PendingVersion);
+        Append(json, "checkOutcome", check?.Outcome.ToString());
+        Append(json, "checkReason", check?.Reason);
+        Append(json, "checkVersion", check?.Version);
+        Append(json, "payload", await ReadPayloadAsync());
+        Append(json, "processPath", Environment.ProcessPath);
+        // A native update replaces the app directory. If MAUI puts app data
+        // inside it, every OTA bundle is deleted by the first native update —
+        // so record where it actually is rather than trusting the earlier
+        // measurement.
+        Append(json, "appDataDirectory", TryAppData());
+        // Which locator answered: Vidra's on Mac Catalyst, Velopack's own
+        // elsewhere. A null here on Catalyst is the whole macOS half failing.
+        Append(json, "locator", VidraNativeUpdates.Locator?.GetType().Name ?? "velopack-default");
+        Append(json, "error", error);
+        json.Append("\n}\n");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(proofPath)!);
+        File.WriteAllText(proofPath, json.ToString());
+        Console.WriteLine(json.ToString());
+        Console.Out.Flush();
+
+        // Velopack's updater waits for this process to exit before swapping the
+        // app directory, so exiting *is* the last step of applying an update.
+        Environment.Exit(0);
+    }
+
+    private static async Task<string?> ReadPayloadAsync()
+    {
+        try
+        {
+            if (!await FileSystem.AppPackageFileExistsAsync(PayloadFile))
+                return null;
+
+            await using var stream = await FileSystem.OpenAppPackageFileAsync(PayloadFile);
+            using var reader = new StreamReader(stream);
+            return (await reader.ReadToEndAsync()).Trim();
+        }
+        catch (Exception ex)
+        {
+            return $"error:{ex.GetType().Name}";
+        }
+    }
+
+    private static string? TryAppData()
+    {
+        try { return FileSystem.AppDataDirectory; }
+        catch (Exception ex) { return $"error:{ex.GetType().Name}"; }
+    }
+
+    private static void Append(StringBuilder json, string key, string? value, bool first = false)
+    {
+        if (!first) json.Append(",\n");
+        json.Append("  \"").Append(key).Append("\": ");
+        if (value is null)
+        {
+            json.Append("null");
+            return;
+        }
+
+        json.Append('"');
+        foreach (var c in value)
+        {
+            json.Append(c switch
+            {
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                _ => c < ' ' ? $"\\u{(int)c:x4}" : c.ToString(),
+            });
+        }
+        json.Append('"');
+    }
+}
