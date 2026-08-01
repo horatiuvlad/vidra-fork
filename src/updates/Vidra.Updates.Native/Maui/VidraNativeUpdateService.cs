@@ -71,6 +71,19 @@ public sealed record NativeUpdateCheckResult(NativeUpdateOutcome Outcome, string
 /// </remarks>
 internal sealed class VidraNativeUpdateService(VidraNativeUpdateOptions options) : IVidraNativeUpdates
 {
+    /// <summary>
+    /// One check at a time.
+    /// </summary>
+    /// <remarks>
+    /// Velopack takes an exclusive lock over the packages directory while it
+    /// downloads, so two overlapping checks are not merely wasteful — the
+    /// second fails with <c>AcquireLockFailedException</c>. That is not
+    /// hypothetical: the startup check and an app-initiated
+    /// <see cref="CheckNowAsync"/> raced on the first CI run of the Windows
+    /// round-trip and the app-initiated one lost.
+    /// </remarks>
+    private readonly SemaphoreSlim _oneAtATime = new(1, 1);
+
     private NativeUpdateSettings? _resolved;
     private UpdateManager? _manager;
     private UpdateInfo? _downloaded;
@@ -98,6 +111,26 @@ internal sealed class VidraNativeUpdateService(VidraNativeUpdateOptions options)
 
     public async Task<NativeUpdateCheckResult> CheckNowAsync(CancellationToken ct = default)
     {
+        await _oneAtATime.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await CheckAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _oneAtATime.Release();
+        }
+    }
+
+    private async Task<NativeUpdateCheckResult> CheckAsync(CancellationToken ct)
+    {
+        // A release is already downloaded and waiting for this process to exit.
+        // Checking again would find nothing newer and report "no update",
+        // which is true and useless — the caller wants to know an update is
+        // coming, and it already is.
+        if (_downloaded is not null && LastCheck is { Outcome: NativeUpdateOutcome.Downloaded })
+            return LastCheck;
+
         var settings = await ResolveAsync().ConfigureAwait(false);
 
         if (settings.Enabled == false)
