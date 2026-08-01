@@ -197,6 +197,12 @@ export const findMacMainExe = (appBundle: string): string | null => {
   const macos = path.join(appBundle, "Contents", "MacOS");
   if (!fs.existsSync(macos)) return null;
 
+  // `CFBundleExecutable` is macOS's own answer to this question, and it is
+  // there before Velopack has been anywhere near the bundle — which is the case
+  // that matters, since this runs on the freshly built `.app`.
+  const declaredByPlist = readBundleExecutable(appBundle);
+  if (declaredByPlist && fs.existsSync(path.join(macos, declaredByPlist))) return declaredByPlist;
+
   const declared = readMainExeFromSpec(appBundle);
   if (declared && fs.existsSync(path.join(macos, declared))) return declared;
 
@@ -206,6 +212,23 @@ export const findMacMainExe = (appBundle: string): string | null => {
     .map((e) => e.name);
 
   return candidates[0] ?? null;
+};
+
+/**
+ * `CFBundleExecutable` out of `Contents/Info.plist` — which binary the OS
+ * launches when the bundle is opened.
+ *
+ * Read with a regex rather than `plutil` so the same code answers on any host;
+ * the key is a plain `<key>`/`<string>` pair in the plist MAUI emits.
+ */
+export const readBundleExecutable = (appBundle: string): string | null => {
+  const plist = path.join(appBundle, "Contents", "Info.plist");
+  if (!fs.existsSync(plist)) return null;
+
+  const match = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(
+    fs.readFileSync(plist, "utf-8"),
+  );
+  return match?.[1].trim() || null;
 };
 
 /** `<mainExe>` out of the nuspec `vpk pack` leaves behind as `sq.version`. */

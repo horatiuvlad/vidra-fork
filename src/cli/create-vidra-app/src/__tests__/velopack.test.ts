@@ -10,6 +10,7 @@ import {
   isVersionAlreadyReleased,
   packArgs,
   parseVpkVersion,
+  readBundleExecutable,
   readMainExeFromSpec,
 } from "../velopack.js";
 
@@ -165,6 +166,22 @@ describe("finding the app inside a packed bundle", () => {
     const app = bundle({ "sq.version": "<mainExe>Notes</mainExe>" }, "Resources");
 
     expect(readMainExeFromSpec(app)).toBe("Notes");
+  });
+
+  /**
+   * On a freshly built `.app` there is no `sq.version` yet — Velopack has not
+   * been near it. `CFBundleExecutable` is macOS's own answer and is already
+   * there, which is what makes it the first thing to ask.
+   */
+  it("prefers CFBundleExecutable, which exists before any pack", () => {
+    const app = bundle({ Notes: "", Helper: "" });
+    nodeFs.writeFileSync(
+      path.join(app, "Contents", "Info.plist"),
+      "<plist><dict><key>CFBundleExecutable</key><string>Notes</string></dict></plist>",
+    );
+
+    expect(readBundleExecutable(app)).toBe("Notes");
+    expect(findMacMainExe(app)).toBe("Notes");
   });
 
   it("says nothing rather than guessing when there is no bundle", () => {
