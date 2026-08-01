@@ -1,5 +1,6 @@
 using Velopack;
 using Velopack.Locators;
+using Velopack.Sources;
 using Vidra.Updates.Native;
 
 namespace Vidra.Hosting;
@@ -248,8 +249,13 @@ internal sealed class VidraNativeUpdateService(VidraNativeUpdateOptions options)
 
         try
         {
+            // An explicit source rather than the URL overload, so the platform
+            // that needs its own downloader can have one. Velopack's default
+            // lowers MaxAutomaticRedirections, which Mac Catalyst refuses
+            // outright — measured in a packaged app, on the first request to
+            // the feed, after everything else had worked.
             _manager = new UpdateManager(
-                settings.FeedUrl,
+                new SimpleWebSource(settings.FeedUrl, VidraNativeUpdates.FileDownloader),
                 new UpdateOptions { ExplicitChannel = settings.Channel },
                 Locator);
         }

@@ -1,5 +1,6 @@
 using Velopack;
 using Velopack.Locators;
+using Velopack.Sources;
 using Vidra.Updates.Native;
 
 namespace Vidra.Hosting;
@@ -19,6 +20,8 @@ public static class VidraNativeUpdates
 {
     private static readonly Lazy<IVelopackLocator?> LazyLocator = new(CreateLocator);
 
+    private static readonly Lazy<IFileDownloader?> LazyDownloader = new(CreateDownloader);
+
     /// <summary>
     /// The locator this platform needs, or <see langword="null"/> where
     /// Velopack's own detection already works.
@@ -30,6 +33,18 @@ public static class VidraNativeUpdates
     /// <c>WindowsVelopackLocator</c> itself, which is measured working.
     /// </remarks>
     public static IVelopackLocator? Locator => LazyLocator.Value;
+
+    /// <summary>
+    /// The downloader this platform needs, or <see langword="null"/> where
+    /// Velopack's own is fine.
+    /// </summary>
+    /// <remarks>
+    /// Non-null only on Mac Catalyst, and for the same reason as
+    /// <see cref="Locator"/>: their default lowers
+    /// <c>MaxAutomaticRedirections</c>, which Catalyst's <c>NSUrlSessionHandler</c>
+    /// refuses. See <see cref="VidraCatalystDownloader"/>.
+    /// </remarks>
+    public static IFileDownloader? FileDownloader => LazyDownloader.Value;
 
     /// <summary>
     /// Installs Vidra's locator, if this platform needs one, and hands the
@@ -54,6 +69,15 @@ public static class VidraNativeUpdates
     {
 #if MACCATALYST
         return new VidraCatalystLocator();
+#else
+        return null;
+#endif
+    }
+
+    private static IFileDownloader? CreateDownloader()
+    {
+#if MACCATALYST
+        return new VidraCatalystDownloader();
 #else
         return null;
 #endif

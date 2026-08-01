@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace Vidra.Updates.Native.Tests;
 
 /// <summary>
@@ -168,5 +170,41 @@ public sealed class NativeUpdateConfigTests
     public void Understands_the_spellings_people_actually_type(string value, bool? expected)
     {
         NativeUpdateConfig.FromEnvironment(_ => value).Enabled.Should().Be(expected);
+    }
+}
+
+/// <summary>
+/// The second thing Velopack assumes about a platform it never claimed.
+/// </summary>
+/// <remarks>
+/// Their downloader builds its handler with <c>MaxAutomaticRedirections = 10</c>.
+/// On Mac Catalyst <see cref="HttpClientHandler"/> is <c>NSUrlSessionHandler</c>,
+/// which refuses to have that lowered — measured in a packaged app, on the very
+/// first request to the feed, after the locator and everything else had worked:
+/// <c>ArgumentOutOfRangeException: It's not possible to lower the max number of
+/// automatic redirections.</c>
+/// </remarks>
+public sealed class VidraCatalystDownloaderTests
+{
+    [Fact]
+    public void Leaves_the_redirect_limit_exactly_where_the_platform_put_it()
+    {
+        using var handler = VidraCatalystDownloader.CreateHandler();
+
+        handler.MaxAutomaticRedirections.Should().Be(new HttpClientHandler().MaxAutomaticRedirections);
+    }
+
+    /// <summary>
+    /// Only the cap is dropped. Redirects are still followed and the same
+    /// decompression is still negotiated, because the rest of Velopack's
+    /// handler is not the part Catalyst objects to.
+    /// </summary>
+    [Fact]
+    public void Keeps_everything_else_Velopack_asked_for()
+    {
+        using var handler = VidraCatalystDownloader.CreateHandler();
+
+        handler.AllowAutoRedirect.Should().BeTrue();
+        handler.AutomaticDecompression.Should().Be(DecompressionMethods.GZip | DecompressionMethods.Deflate);
     }
 }
