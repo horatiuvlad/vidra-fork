@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deliberately not a MAUI project. Everything here is decidable without a
+    WebView — which manifest entry is installable, what a state transition does,
+    whether an archive is safe to extract — so it builds and tests on any
+    runner, including the Linux leg where the rest of the host cannot.
+    Vidra.Hosting.Maui adds the platform glue on top.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Vidra.Updates</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <PackageId>Vidra.Updates</PackageId>
+    <Description>Over-the-air JS bundle updates for Vidra apps — manifest, verification, and promotion.</Description>
+  </PropertyGroup>
+
+</Project>

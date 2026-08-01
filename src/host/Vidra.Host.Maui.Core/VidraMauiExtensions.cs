@@ -70,7 +70,41 @@ public static class VidraMauiExtensions
 
         builder.Services.AddSingleton<WebViewBridge>();
 
+        // Registration of the built-in contracts rides on constructing the
+        // modules, so anything reading a fingerprint before the first page would
+        // otherwise hash a partial manifest. See VidraContractWarmup.
+        builder.Services.AddSingleton<Microsoft.Maui.Hosting.IMauiInitializeService, VidraContractWarmup>();
+
         EnableWebViewInspection(builder);
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Turns on over-the-air JS bundle updates. Call after <see cref="UseVidra"/>.
+    /// </summary>
+    /// <remarks>
+    /// With no arguments the app is configured by the <c>vidra.updates</c> block in
+    /// its own <c>package.json</c>, which <c>vidra build</c> stamps into the
+    /// bundle — no feed URL there means nothing is ever checked, so calling this
+    /// unconditionally (as the template does) costs an app that does not want
+    /// updates nothing but a state file read.
+    ///
+    /// Native code is never updated this way. A bundle only installs when both
+    /// contract fingerprints match the running host, so a JS bundle can never
+    /// call a bridge the installed binary does not have.
+    /// </remarks>
+    public static MauiAppBuilder UseVidraUpdates(
+        this MauiAppBuilder builder,
+        Action<VidraUpdateOptions>? configure = null)
+    {
+        var options = new VidraUpdateOptions();
+        configure?.Invoke(options);
+
+        builder.Services.AddSingleton(options);
+        builder.Services.AddSingleton<VidraUpdateService>();
+        builder.Services.AddSingleton<IVidraUpdates>(sp => sp.GetRequiredService<VidraUpdateService>());
+        builder.Services.AddSingleton<Microsoft.Maui.Hosting.IMauiInitializeService, VidraUpdateStartup>();
 
         return builder;
     }

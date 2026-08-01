@@ -1,4 +1,6 @@
 import { buildCommand } from "./commands/build.js";
+import { bundleCommand } from "./commands/bundle.js";
+import { keygenCommand } from "./commands/keygen.js";
 import { verifyCommand } from "./commands/verify.js";
 import { devCommand, runCommand } from "./commands/dev.js";
 import { runDoctor } from "./doctor.js";
@@ -20,6 +22,8 @@ const printHelp = (): void => {
 ${cmd("dev", "start vite + the native host (UI + C# reload on save)")}
 ${cmd("run", "launch the native host only")}
 ${cmd("build", "build & package for distribution")}
+${cmd("bundle", "pack ui/dist as an OTA bundle + update its feed")}
+${cmd("keygen", "create the key that signs your update feed")}
 ${cmd("verify", "check a built artifact is actually shippable")}
 ${cmd("doctor", "check your environment")}
 ${cmd("help", "show this message")}
@@ -29,6 +33,11 @@ ${ex("dev --target windows", "run the windows host")}
 ${ex("dev --no-hot-reload", "skip dotnet watch, classic launch")}
 ${ex("build --plan", "preview the build, run nothing")}
 ${ex("build --target macos", "build & package a macOS DMG")}
+${ex("bundle", "pack an OTA bundle into dist/")}
+${ex("bundle --channel beta", "publish it on the beta channel")}
+${ex("bundle --sign key.pem", "publish a signed feed")}
+${ex("bundle --merge-from URL", "add to the feed you already publish")}
+${ex("keygen", "create an update signing key")}
 ${ex("verify", "check the newest artifact in dist/")}
 ${ex("doctor", "verify .NET SDK + MAUI workload")}
 `);
@@ -47,6 +56,12 @@ const main = async (): Promise<void> => {
       break;
     case "build":
       await buildCommand(args.slice(1));
+      break;
+    case "bundle":
+      await bundleCommand(args.slice(1));
+      break;
+    case "keygen":
+      await keygenCommand(args.slice(1));
       break;
     case "verify":
       await verifyCommand(args.slice(1));

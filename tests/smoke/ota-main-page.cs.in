@@ -1,0 +1,146 @@
+// Runtime proof for over-the-air bundle updates, used only by CI.
+//
+// Replaces the scaffolded app's MainPage. Each launch reports what actually
+// served — read out of the page itself, not inferred from a log line — plus what
+// the update client did, then exits so the driver can launch again. A sequence
+// of launches is how promotion, probation and rollback become observable.
+//
+// Without VIDRA_OTA_PROOF set it behaves like the normal template page.
+
+using System.Text;
+using Vidra.Bridge;
+using Vidra.Hosting;
+
+namespace __PROJECT_NAMESPACE__;
+
+public class MainPage : VidraPage
+{
+    public MainPage()
+    {
+        var proofPath = Environment.GetEnvironmentVariable("VIDRA_OTA_PROOF");
+        if (string.IsNullOrEmpty(proofPath))
+            return;
+
+        _ = RunAsync(proofPath);
+    }
+
+    private async Task RunAsync(string proofPath)
+    {
+        var updates = IPlatformApplication.Current?.Services.GetService<IVidraUpdates>();
+        var deadline = DateTime.UtcNow.AddSeconds(Seconds("VIDRA_OTA_TIMEOUT", 45));
+
+        string? marker = null;
+        int? counter = null;
+        string? bridgeError = null;
+
+        // Poll rather than sleeping a fixed time: the page has to load, the SDK
+        // has to boot, and the background update check has to finish, and none of
+        // those have a predictable duration on a CI runner.
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            marker = Normalize(await EvaluateAsync("String(window.__vidraBundleMarker)"));
+
+            if (counter is null)
+            {
+                try
+                {
+                    counter = await Bridge.Js().Counter.IncrementAsync();
+                    bridgeError = null;
+                }
+                catch (Exception ex)
+                {
+                    bridgeError = ex.Message;
+                }
+            }
+
+            // Done as soon as the check has reported *something* — staged, refused,
+            // nothing to do. Waiting for a pending version instead means every
+            // negative case (a refused signature, an incompatible bundle) sits
+            // here until the deadline, which is where this test spent most of
+            // its ten minutes.
+            if (updates?.LastCheck is not null && counter is not null)
+                break;
+        }
+
+        var json = new StringBuilder("{\n");
+        Append(json, "marker", marker, first: true);
+        Append(json, "href", Normalize(await EvaluateAsync("String(document.location.href)")));
+        Append(json, "currentVersion", updates?.CurrentVersion);
+        Append(json, "currentBundle", updates?.CurrentBundle);
+        Append(json, "pendingVersion", updates?.PendingVersion);
+        Append(json, "lastCheck", updates?.LastCheck?.Reason);
+        Append(json, "appData", FileSystem.AppDataDirectory);
+        Append(json, "coreFingerprint", Fingerprint(BridgeManifestScope.Core));
+        Append(json, "appFingerprint", Fingerprint(BridgeManifestScope.App));
+        Append(json, "bridgeError", bridgeError);
+        json.Append(",\n  \"counter\": ").Append(counter?.ToString() ?? "null");
+        json.Append("\n}\n");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(proofPath)!);
+        File.WriteAllText(proofPath, json.ToString());
+        Console.WriteLine(json.ToString());
+        Console.Out.Flush();
+
+        Environment.Exit(0);
+    }
+
+    private static string Fingerprint(BridgeManifestScope scope)
+    {
+        try
+        {
+            return BridgeContractRegistry.Fingerprint(scope);
+        }
+        catch (Exception ex)
+        {
+            return $"error:{ex.GetType().Name}";
+        }
+    }
+
+    private async Task<string?> EvaluateAsync(string script)
+    {
+        try
+        {
+            return await MainThread.InvokeOnMainThreadAsync(
+                () => AppWebView.EvaluateJavaScriptAsync(script));
+        }
+        catch (Exception ex)
+        {
+            return $"error:{ex.Message}";
+        }
+    }
+
+    private static int Seconds(string name, int fallback)
+        => int.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+
+    /// <summary>Platforms disagree about whether a JS string comes back quoted.</summary>
+    private static string? Normalize(string? value)
+        => value?.Trim().Trim('"');
+
+    private static void Append(StringBuilder json, string key, string? value, bool first = false)
+    {
+        if (!first) json.Append(",\n");
+        json.Append("  \"").Append(key).Append("\": ");
+        if (value is null)
+        {
+            json.Append("null");
+            return;
+        }
+
+        json.Append('"');
+        foreach (var c in value)
+        {
+            json.Append(c switch
+            {
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                _ => c < ' ' ? $"\\u{(int)c:x4}" : c.ToString(),
+            });
+        }
+        json.Append('"');
+    }
+}

@@ -50,9 +50,18 @@ public sealed partial class WebViewBridge
 
     partial void LoadProductionAssetsCore(WebView webView)
     {
-        var resourcePath = Foundation.NSBundle.MainBundle.ResourcePath;
-        var wwwrootPath = System.IO.Path.Combine(resourcePath, "wwwroot");
+        var embeddedPath = System.IO.Path.Combine(
+            Foundation.NSBundle.MainBundle.ResourcePath,
+            "wwwroot");
+
+        // An external root is just a different directory to grant read access
+        // to: LoadFileUrl already takes the containing directory explicitly, so
+        // WKWebView's sandbox rule (the read-access URL must contain the file)
+        // is satisfied the same way wherever the bundle lives.
+        var externalRoot = WebAssetRoot.Resolve();
+        var wwwrootPath = externalRoot ?? embeddedPath;
         var indexPath = System.IO.Path.Combine(wwwrootPath, "index.html");
+        WebAssetRoot.Announce(wwwrootPath, externalRoot is not null, "loadFileURL");
 
         void Load()
         {

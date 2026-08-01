@@ -84,6 +84,7 @@ jobs:
           dotnet restore tests/dotnet/Vidra.Modules.FileSystem.Tests/Vidra.Modules.FileSystem.Tests.csproj
           dotnet restore tests/dotnet/Vidra.Modules.Windowing.Tests/Vidra.Modules.Windowing.Tests.csproj
           dotnet restore tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj
+          dotnet restore tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj
 
       - name: Build C# test projects
         run: |
@@ -93,6 +94,7 @@ jobs:
           dotnet build tests/dotnet/Vidra.Modules.FileSystem.Tests/Vidra.Modules.FileSystem.Tests.csproj -c Release --no-restore
           dotnet build tests/dotnet/Vidra.Modules.Windowing.Tests/Vidra.Modules.Windowing.Tests.csproj -c Release --no-restore
           dotnet build tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj -c Release --no-restore
+          dotnet build tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj -c Release --no-restore
 
       - name: Run Vidra.Bridge.Tests
         run: dotnet test tests/dotnet/Vidra.Bridge.Tests/Vidra.Bridge.Tests.csproj -c Release --no-build --logger "trx;LogFileName=bridge.trx"
@@ -116,6 +118,13 @@ jobs:
 
       - name: Run Vidra.Modules.Essentials.Tests
         run: dotnet test tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj -c Release --no-build --logger "trx;LogFileName=modules-essentials.trx"
+
+      # The update client is deliberately MAUI-free so its decisions — which
+      # bundle is installable, what a failed boot does, whether an archive is
+      # safe to extract — are testable here rather than only through a packaged
+      # app on the per-OS legs.
+      - name: Run Vidra.Updates.Tests
+        run: dotnet test tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj -c Release --no-build --logger "trx;LogFileName=updates.trx"
 
       # ---- TypeScript SDK ----
       - name: Install SDK dependencies
@@ -532,6 +541,87 @@ jobs:
         run: |
           ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT" `
             -Cli "$env:GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
+
+      # ---- Over-the-air bundle updates ----
+      #
+      # A second build of the same scaffold, configured for updates and driven
+      # through a sequence of launches against a real HTTP feed. Sequence is the
+      # point: "applies on the next launch", "never applies", and "is undone
+      # after failing twice" are all statements about consecutive runs, and none
+      # of them can be observed from a single one.
+      - name: Configure the scaffolded app for updates
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          # The opt-in a real app makes: one builder call, and a feed in
+          # package.json that `vidra build` stamps into the bundle.
+          # A real signing key, made by the command a publisher would run. The
+          # public half goes into package.json, which makes signatures mandatory
+          # for this app — so the whole run also proves the signed path works.
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            keygen --out ota-signing-key.pem
+          node -e "
+            const fs = require('fs');
+            const file = 'src/VidraSmoke.Host/MauiProgram.cs';
+            const source = fs.readFileSync(file, 'utf8');
+            if (!source.includes('.UseVidra()')) { console.error('no UseVidra() call to extend'); process.exit(1); }
+            fs.writeFileSync(file, source.replace('.UseVidra()', '.UseVidra()\n            .UseVidraUpdates()'));
+            const publicKey = fs.readFileSync('ota-signing-key.pem.pub', 'utf8').trim();
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.vidra = { updates: { feedUrl: 'http://127.0.0.1:8099/bundles.json', publicKeys: [publicKey] } };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          sed 's/__PROJECT_NAMESPACE__/VidraSmoke/' \
+            "$GITHUB_WORKSPACE/tests/smoke/ota-main-page.cs.in" \
+            > src/VidraSmoke.Host/MainPage.cs
+          grep -n "UseVidraUpdates" src/VidraSmoke.Host/MauiProgram.cs
+
+      - name: Rebuild the app with updates enabled
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target ${{ matrix.target }}
+
+      - name: Locate the update-enabled app (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          root=src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst
+          app="$(find "$root" -maxdepth 1 -name '*.app' -type d -print -quit)"
+          [ -n "$app" ] || { echo "::error::no .app under $root"; exit 1; }
+          echo "OTA_BIN=$PWD/$app/Contents/MacOS/$(ls "$app/Contents/MacOS" | head -1)" >> "$GITHUB_ENV"
+
+      - name: Locate the update-enabled app (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          exe="src/VidraSmoke.Host/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish/VidraSmoke.Host.exe"
+          [ -f "$exe" ] || { echo "::error::no VidraSmoke.Host.exe at $exe"; exit 1; }
+          echo "OTA_BIN=$(cygpath -w "$PWD/$exe")" >> "$GITHUB_ENV"
+
+      - name: Prove an update applies, is refused, or is rolled back
+        timeout-minutes: 20
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi; }
+          node "$(native "$GITHUB_WORKSPACE/tests/smoke/ota-e2e.mjs")" \
+            --bin "$OTA_BIN" \
+            --project "$(native "$PWD")" \
+            --cli "$(native "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js")" \
+            --signing-key "$(native "$PWD/ota-signing-key.pem")" \
+            --work "$(native "${{ runner.temp }}/ota-work")"
+
+      - name: Upload OTA proofs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-proofs-${{ matrix.os }}
+          path: ${{ runner.temp }}/ota-work/*.json
+          if-no-files-found: ignore
 
       # Uploaded even on failure, since a broken installer is worth inspecting.
       # Staying lenient here is deliberate: the strict gate is the
