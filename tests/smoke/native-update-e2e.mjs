@@ -39,7 +39,11 @@ const feedUrl = `http://127.0.0.1:${port}/`;
 let failures = 0;
 
 try {
-  const first = await launch("1-report-before", { VIDRA_NATIVE_MODE: "report" });
+  // The reporting launches keep the background check switched off. It is not
+  // that the check is unwelcome — it is that this test is about a sequence, and
+  // a launch that quietly staged 1.0.1 while reporting on 1.0.0 would make the
+  // next step's result depend on how fast the runner's network was.
+  const first = await launch("1-report-before", { VIDRA_NATIVE_MODE: "report", VIDRA_NATIVE_UPDATE_ENABLED: "0" });
   expect(first.error === null, "the app raised nothing at startup", first.error);
   expect(first.isInstalled === "True", "the app knows it is a Velopack install", first.isInstalled);
   expect(first.currentVersion === "1.0.0", "reports version 1.0.0", first.currentVersion);
@@ -69,7 +73,7 @@ try {
   // rewritten underneath it, and produces no output at all.
   await waitForUpdaterToExit(120_000);
 
-  const after = await launch("3-report-after", { VIDRA_NATIVE_MODE: "report" });
+  const after = await launch("3-report-after", { VIDRA_NATIVE_MODE: "report", VIDRA_NATIVE_UPDATE_ENABLED: "0" });
   expect(after.currentVersion === "1.0.1", "the updated app reports 1.0.1", after.currentVersion);
   expect(after.payload === "payload-1.0.1", "the updated app carries the 1.0.1 payload", after.payload);
   expect(after.isInstalled === "True", "the updated app is still a Velopack install", after.isInstalled);

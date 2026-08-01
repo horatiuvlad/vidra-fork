@@ -244,7 +244,10 @@ const mergeFromLiveFeed = (
   // Distinguishing them from here is guesswork, so this warns loudly rather
   // than either failing a legitimate first release or staying quiet about a
   // feed the developer thinks is being merged.
-  io.warn(result.output.trim());
+  //
+  // The tail only: an unreachable feed produces twenty frames of
+  // HttpConnectionPool, and the line that says what happened is the last one.
+  io.warn(lastLines(result.output, 4));
   return "empty-feed";
 };
 
@@ -296,3 +299,6 @@ const findAppBundle = (root: string, depth = 0): string | null => {
   }
   return null;
 };
+
+const lastLines = (text: string, count: number): string =>
+  text.trim().split(/\r?\n/).slice(-count).join("\n");
