@@ -5,7 +5,7 @@ namespace Vidra.Updates.Native.Tests;
 /// </summary>
 /// <remarks>
 /// These run on the Linux leg in milliseconds because the locator is a pure
-/// function of a process path and the files under it — no MAUI, no UIKit, no
+/// function of a process path and the files under it, with no MAUI, no UIKit, no
 /// packaged app. The macOS leg then checks the same class against Velopack's
 /// own implementation (<see cref="LocatorConformanceTests"/>); this file is
 /// about behaviour we chose, that one is about behaviour we copied.
@@ -76,7 +76,7 @@ public sealed class VidraCatalystLocatorTests
     }
 
     /// <summary>
-    /// No <c>UpdateMac</c> means this bundle was never packed — a plain
+    /// No <c>UpdateMac</c> means this bundle was never packed, most likely a plain
     /// <c>vidra build</c> output, most likely. Answering "nothing installed"
     /// makes <c>UpdateManager.IsInstalled</c> false, which is the honest
     /// answer; throwing here would take the app down at launch.
@@ -128,7 +128,7 @@ public sealed class VidraCatalystLocatorTests
 
     /// <summary>
     /// The one path Velopack stages downloads into. It lives outside the
-    /// bundle on purpose — the bundle is what gets replaced.
+    /// bundle on purpose, because the bundle is what gets replaced.
     /// </summary>
     [Fact]
     public void Stages_packages_under_the_user_caches_directory()
@@ -144,7 +144,7 @@ public sealed class VidraCatalystLocatorTests
 
     /// <summary>
     /// A bundle carrying no channel means Velopack's own default for the
-    /// platform, which <c>UpdateManager</c> resolves — not the empty string,
+    /// platform, which <c>UpdateManager</c> resolves, not the empty string,
     /// which would look for <c>releases..json</c>.
     /// </summary>
     [Fact]

@@ -14,7 +14,7 @@ import fs from "fs-extra";
  * nothing at all.
  */
 /**
- * The `native` sub-block — Velopack's half of the same surface.
+ * The `native` sub-block: Velopack's half of the same surface.
  *
  * One `vidra.updates` block configures both tiers, and one prefix can serve
  * both: `releases.{channel}.json` and `bundles.json` never collide. The two
@@ -26,7 +26,7 @@ export interface NativeUpdateConfig {
   feedUrl?: string;
   /**
    * Velopack's channel, not Vidra's. Unset means Velopack's own default for the
-   * platform — `win` / `osx`, the names `vpk pack` puts in
+   * platform: `win` / `osx`, the names `vpk pack` puts in
    * `releases.{channel}.json`.
    */
   channel?: string;

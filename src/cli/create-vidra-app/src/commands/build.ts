@@ -81,7 +81,7 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   const verbose = !!args["verbose"];
   const plan = !!args["plan"] || !!args["dry-run"];
   // Opt-in per build, configured in package.json. A flag rather than pure
-  // config because packing publishes a release into a feed — a side effect no
+  // config because packing publishes a release into a feed: a side effect no
   // build should acquire by someone adding a block to a file.
   const nativeUpdate = !!args["native-update"];
   const targetName = (args["target"] as string) || detectPlatform();
@@ -630,7 +630,7 @@ const stepDotnetPublish = (
  * Everything Velopack needs is something the build already resolved: the signed
  * bundle, the identity, the entitlements, the version out of `package.json`.
  * That is the whole argument for `vpk` being a build step rather than a
- * separate publish command — there is no second place to keep any of it in step.
+ * separate publish command: there is no second place to keep any of it in step.
  */
 const stepNativeUpdate = (
   project: ProjectInfo,
@@ -673,7 +673,7 @@ const stepNativeUpdate = (
         glyph: "manual",
         label: "merge feed",
         labelWidth: LABEL_WIDTH,
-        detail: dim("no vidra.updates.native.feedUrl — this release is packed but the app will never check for it"),
+        detail: dim("no vidra.updates.native.feedUrl: this release is packed but the app will never check for it"),
       }),
     );
   } else if (outcome.merged === "empty-feed") {
@@ -682,7 +682,7 @@ const stepNativeUpdate = (
         glyph: "manual",
         label: "merge feed",
         labelWidth: LABEL_WIDTH,
-        detail: dim("nothing downloaded — first release, or the feed is unreachable (see the warning above)"),
+        detail: dim("nothing downloaded: first release, or the feed is unreachable (see the warning above)"),
       }),
     );
   } else {
@@ -729,7 +729,7 @@ const stepNativeUpdate = (
  *
  * The portable zip *is* the self-contained ZIP this target used to roll by
  * hand, so it takes that name. `Setup.exe` is versioned on the way out because
- * `vpk pack` overwrites it in the output directory on every release — a
+ * `vpk pack` overwrites it in the output directory on every release, so a
  * publisher who packs two versions into one prefix otherwise keeps only the
  * newest installer, which is how "install 1.0.0" once silently installed 1.0.1.
  */
@@ -764,7 +764,7 @@ const stepPublishVelopackWindowsArtifacts = (
         glyph: "done",
         label: "installer",
         labelWidth: LABEL_WIDTH,
-        detail: `${value(setupName)} ${dim("— the recommended download; updates apply in place")}`,
+        detail: `${value(setupName)} ${dim("the recommended download; updates apply in place")}`,
       }),
     );
   }

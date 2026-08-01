@@ -511,8 +511,8 @@ export const checkVelopack = (required: boolean): Requirement => {
     name: "Velopack (vpk)",
     status: required ? "missing" : "unknown",
     detail: required
-      ? "vidra.updates.native is configured but vpk is not installed — `vidra build --native-update` cannot run"
-      : "not installed — only needed for `vidra build --native-update`",
+      ? "vidra.updates.native is configured but vpk is not installed, so `vidra build --native-update` cannot run"
+      : "not installed, and only needed for `vidra build --native-update`",
     fix: "dotnet tool install -g vpk",
   };
 };
@@ -522,7 +522,7 @@ export const checkVelopack = (required: boolean): Requirement => {
  * cleanly and never updates.
  *
  * This is the one part of the update story that cannot report itself. An app
- * with no `vidra.updates` block logs nothing at runtime, deliberately — so a
+ * with no `vidra.updates` block logs nothing at runtime, deliberately, so a
  * misspelled key is indistinguishable from "updates not wanted", and the
  * symptom arrives much later, as nobody receiving an update.
  *
@@ -538,7 +538,7 @@ export const diagnoseUpdateConfiguration = (input: {
 }): Requirement[] => {
   const { config } = input;
   // Comments first. The scaffolded MauiProgram explains how to turn updates on,
-  // and that explanation names the very call being looked for — so a naive
+  // and that explanation names the very call being looked for, so a naive
   // substring search reports every fresh app as already wired up.
   const mauiProgram = input.mauiProgram === null ? null : stripComments(input.mauiProgram);
   const usesUpdates = mauiProgram?.includes(".UseVidraUpdates(") ?? false;
@@ -558,8 +558,8 @@ export const diagnoseUpdateConfiguration = (input: {
     found.push({
       name: "OTA updates configured",
       status: "missing",
-      detail: ".UseVidraUpdates() is called, but package.json has no vidra.updates block — nothing is ever checked",
-      fix: 'add "vidra": { "updates": { "feedUrl": "…" } } to package.json',
+      detail: ".UseVidraUpdates() is called, but package.json has no vidra.updates block, nothing is ever checked",
+      fix: 'add "vidra": { "updates": { "feedUrl": "https://..." } } to package.json',
     });
   }
 
@@ -567,7 +567,7 @@ export const diagnoseUpdateConfiguration = (input: {
     found.push({
       name: "Feed signature",
       status: "missing",
-      detail: "publicKeys are configured, so signatures are mandatory — but the published bundles.json has no .sig beside it",
+      detail: "publicKeys are configured, so signatures are mandatory, but the published bundles.json has no .sig beside it",
       fix: "republish with `vidra bundle --sign <key.pem>`",
     });
   }
@@ -585,8 +585,8 @@ export const diagnoseUpdateConfiguration = (input: {
       found.push({
         name: "Native feed",
         status: "missing",
-        detail: "vidra.updates.native has no feedUrl — releases can be packed, and no installed app will ever find them",
-        fix: 'set "vidra": { "updates": { "native": { "feedUrl": "https://…/" } } }',
+        detail: "vidra.updates.native has no feedUrl: releases can be packed, and no installed app will ever find them",
+        fix: 'set "vidra": { "updates": { "native": { "feedUrl": "https://.../" } } }',
       });
     }
   }
@@ -595,7 +595,7 @@ export const diagnoseUpdateConfiguration = (input: {
 };
 
 /**
- * C# line and block comments, removed. Crude on purpose — it does not know
+ * C# line and block comments, removed. Crude on purpose: it does not know
  * about strings, and nothing here needs it to: the only question is whether a
  * builder call is live code or the template explaining itself.
  */

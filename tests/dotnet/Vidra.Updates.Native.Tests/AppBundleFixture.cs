@@ -3,14 +3,14 @@ using Velopack.Locators;
 namespace Vidra.Updates.Native.Tests;
 
 /// <summary>
-/// A throwaway <c>.app</c> shaped exactly like one <c>vpk pack</c> produces —
+/// A throwaway <c>.app</c> shaped exactly like one <c>vpk pack</c> produces,
 /// enough of one for a locator to read, which is all a locator ever does.
 /// </summary>
 /// <remarks>
 /// Building it by hand rather than by running <c>vpk</c> is deliberate: this
 /// has to work on the Linux leg, where <c>vpk</c> packs AppImages and there is
 /// no macOS bundle to be had. The shape is pinned by the conformance test,
-/// which reads the same tree with Velopack's own locator on the macOS leg — if
+/// which reads the same tree with Velopack's own locator on the macOS leg. If
 /// this fixture stopped resembling a real bundle, that test would say so.
 /// </remarks>
 internal sealed class AppBundleFixture : IDisposable

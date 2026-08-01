@@ -129,8 +129,8 @@ jobs:
         run: dotnet test tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj -c Release --no-build --logger "trx;LogFileName=updates.trx"
 
       # The Mac Catalyst locator and the native config resolution are plain
-      # .NET — a locator is a function of a process path and the files under it
-      # — so both are decided here in milliseconds. The conformance test in the
+      # .NET: a locator is a function of a process path and the files under it
+      #, so both are decided here in milliseconds. The conformance test in the
       # same project needs a real Mac and skips itself; it runs on the macOS
       # leg, where Velopack's own locator can be constructed to compare against.
       - name: Run Vidra.Updates.Native.Tests
@@ -658,7 +658,7 @@ jobs:
       # The same scaffold again, this time shipping Velopack: two releases built
       # by `vidra build --native-update`, the first one installed, and the second
       # applied to it in place. Folded in from the throwaway `probe/velopack`
-      # rig, which proved the sequence against raw Velopack — what is under test
+      # rig, which proved the sequence against raw Velopack. What is under test
       # here is Vidra's own glue: the entry points, the builder call, the config
       # resolution, and (on macOS) the Catalyst locator Velopack does not ship.
       #
@@ -683,14 +683,14 @@ jobs:
             --main-page "$GITHUB_WORKSPACE/tests/smoke/native-update-main-page.cs.in"
           # A new package reference changes the dependency graph, and Mac
           # Catalyst's incremental build happily reuses AOT images compiled
-          # against the old one — producing an app that aborts at launch with
-          # "Failed to load AOT module … because a dependency … is out of date".
+          # against the old one, producing an app that aborts at launch with
+          # "Failed to load AOT module ... because a dependency ... is out of date".
           # This job is the only place a Vidra app ever acquires a reference
           # mid-build; a developer adds one and builds, which is what this is.
           rm -rf src/VidraSmoke.Host/bin src/VidraSmoke.Host/obj
 
       # The feed is not serving during the build, so `vpk download` finds
-      # nothing and warns — which is exactly the first-release case.
+      # nothing and warns, which is exactly the first-release case.
       - name: Build and pack 1.0.0
         timeout-minutes: 25
         shell: bash

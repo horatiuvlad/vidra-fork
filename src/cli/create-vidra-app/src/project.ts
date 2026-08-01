@@ -44,8 +44,8 @@ export const detectProject = (cwd: string): ProjectInfo => {
 };
 
 /**
- * The same search, without the exit. `vidra doctor` runs anywhere — including a
- * repo root that is not an app — and "no project here" is a fact about the
+ * The same search, without the exit. `vidra doctor` runs anywhere, including a
+ * repo root that is not an app, and "no project here" is a fact about the
  * directory rather than a failure of the command.
  */
 export const tryDetectProject = (cwd: string): ProjectInfo | null => {

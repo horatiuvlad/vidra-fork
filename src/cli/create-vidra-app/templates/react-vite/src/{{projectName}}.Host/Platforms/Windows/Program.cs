@@ -1,8 +1,9 @@
 // The app's real entry point on Windows.
 //
-// MAUI generates one of these for you. This app takes it over — `<DefineConstants>`
-// in the csproj sets DISABLE_XAML_GENERATED_MAIN — for one reason: a native
-// updater has to run *first*, before any UI framework starts.
+// MAUI generates one of these for you. This app takes it over, via
+// `<DefineConstants>` in the csproj setting DISABLE_XAML_GENERATED_MAIN, for
+// one reason: a native updater has to run *first*, before any UI framework
+// starts.
 //
 // On install, update and uninstall, Velopack re-launches the app with a
 // `--veloapp-*` argument and expects it to do that work and exit without ever

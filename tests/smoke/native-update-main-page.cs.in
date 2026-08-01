@@ -1,11 +1,11 @@
 // Runtime proof for the native-update round-trip, used only by CI.
 //
 // Replaces the scaffolded app's MainPage. One launch = one JSON proof read out
-// of the running app, then exit — because "an update was applied" is a claim
+// of the running app, then exit, because "an update was applied" is a claim
 // about a *sequence* of launches and cannot be observed from one.
 //
-// Unlike the throwaway probe this replaced, it drives Vidra's own surface —
-// `IVidraNativeUpdates`, resolved from DI — rather than Velopack directly. What
+// Unlike the throwaway probe this replaced, it drives Vidra's own surface,
+// `IVidraNativeUpdates`, resolved from DI, rather than Velopack directly. What
 // is under test is the glue: the locator, the config resolution, the builder
 // call, and the entry point. Velopack itself is already known to work.
 //
@@ -51,7 +51,7 @@ public class MainPage : VidraPage
         {
             if (_updates is null)
             {
-                error = "IVidraNativeUpdates was not registered — UseVidraNativeUpdates() never ran";
+                error = "IVidraNativeUpdates was not registered, so UseVidraNativeUpdates() never ran";
             }
             else if (mode == "update")
             {
@@ -77,7 +77,7 @@ public class MainPage : VidraPage
         Append(json, "payload", await ReadPayloadAsync());
         Append(json, "processPath", Environment.ProcessPath);
         // A native update replaces the app directory. If MAUI puts app data
-        // inside it, every OTA bundle is deleted by the first native update —
+        // inside it, every OTA bundle is deleted by the first native update,
         // so record where it actually is rather than trusting the earlier
         // measurement.
         Append(json, "appDataDirectory", TryAppData());

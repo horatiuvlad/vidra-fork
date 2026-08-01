@@ -9,7 +9,7 @@ namespace Vidra.Hosting;
 /// The part of native updates an app's <c>Main</c> touches.
 /// </summary>
 /// <remarks>
-/// <c>VelopackApp.Build()…Run()</c> has to appear literally in the entry point:
+/// <c>VelopackApp.Build().Run()</c> has to appear literally in the entry point:
 /// <c>vpk pack</c> inspects the assembly statically and warns when it finds the
 /// call anywhere else, and a hook launch (<c>--veloapp-install</c> and friends)
 /// that lands after the UI framework has started is a hook that spins up a
@@ -27,7 +27,7 @@ public static class VidraNativeUpdates
     /// Velopack's own detection already works.
     /// </summary>
     /// <remarks>
-    /// Non-null only on Mac Catalyst, which Velopack does not enumerate — see
+    /// Non-null only on Mac Catalyst, which Velopack does not enumerate: see
     /// <see cref="VidraCatalystLocator"/>. On Windows this is
     /// <see langword="null"/> and Velopack picks
     /// <c>WindowsVelopackLocator</c> itself, which is measured working.

@@ -97,7 +97,7 @@ describe("downloadArgs", () => {
 describe("isVersionAlreadyReleased", () => {
   /**
    * Measured with vpk 1.2.0: packing a version equal to or lower than the
-   * newest in the output directory's index exits 255 and writes nothing —
+   * newest in the output directory's index exits 255 and writes nothing,
    * no overwrite, no second package under one version, no damaged index.
    * Recognising it is what turns a stack trace into "bump the version".
    */
@@ -154,7 +154,7 @@ describe("finding the app inside a packed bundle", () => {
 
   /**
    * `Contents/MacOS` holds three things after a pack, and taking the first
-   * directory entry once picked `UpdateMac` — which starts, prints "No known
+   * directory entry once picked `UpdateMac`, which starts, prints "No known
    * subcommand was used", and exits, exactly like an app that never booted.
    */
   it("reads the app's own binary out of sq.version", () => {
@@ -180,7 +180,7 @@ describe("finding the app inside a packed bundle", () => {
   });
 
   /**
-   * On a freshly built `.app` there is no `sq.version` yet — Velopack has not
+   * On a freshly built `.app` there is no `sq.version` yet, since Velopack has not
    * been near it. `CFBundleExecutable` is macOS's own answer and is already
    * there, which is what makes it the first thing to ask.
    */

@@ -8,7 +8,7 @@
 //
 // `UseVidraLocator()` is the Mac Catalyst part. Velopack's client picks its
 // locator from `RuntimeInformation.IsOSPlatform`, which answers false for OSX
-// here — so without it, `Run()` throws before any update logic executes.
+// here, so without it, `Run()` throws before any update logic executes.
 //
 // To turn native updates on:
 //   1. add the Vidra.Updates.Native package reference to this project

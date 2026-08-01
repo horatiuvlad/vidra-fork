@@ -12,8 +12,8 @@ namespace Vidra.Updates.Native;
 /// <remarks>
 /// <para>
 /// Velopack advertises Windows, OSX and Linux. On Mac Catalyst
-/// <c>RuntimeInformation.IsOSPlatform(OSPlatform.OSX)</c> is <b>false</b> —
-/// measured in a packaged app, not read out of their source — so
+/// <c>RuntimeInformation.IsOSPlatform(OSPlatform.OSX)</c> is <b>false</b>. That
+/// was measured in a packaged app rather than read out of their source. So
 /// <c>VelopackRuntimeInfo.SystemOs</c> stays <c>Unknown</c>,
 /// <c>VelopackLocator.CreateDefaultForPlatform</c> has no branch to take, and
 /// <c>VelopackApp.Run()</c> throws <c>PlatformNotSupportedException</c> before
@@ -22,7 +22,7 @@ namespace Vidra.Updates.Native;
 /// </para>
 /// <para>
 /// That is an unsupported platform, not a defect, and Velopack's own error
-/// message names the way out — <c>provide IVelopackLocator as a method
+/// message names the way out: <c>provide IVelopackLocator as a method
 /// parameter</c>. This is that locator. Everything else about a Catalyst
 /// install is a macOS install: <c>vpk pack</c> writes the same
 /// <c>sq.version</c>, ships the same <c>UpdateMac</c>, and stages packages in
@@ -32,7 +32,7 @@ namespace Vidra.Updates.Native;
 /// <para>
 /// It deliberately does <b>not</b> guard on the running OS. Every value it
 /// produces is a function of the process path and the files under it, so it
-/// constructs anywhere — which is what lets the Linux leg exercise it over a
+/// constructs anywhere, which is what lets the Linux leg exercise it over a
 /// fixture <c>.app</c> tree in milliseconds, and what lets the macOS leg
 /// construct it alongside Velopack's own locator and compare the two
 /// (<c>Vidra.Updates.Native.Tests</c>). Their implementation is the oracle: the
@@ -72,7 +72,7 @@ public sealed class VidraCatalystLocator : VelopackLocator
 
     /// <summary>
     /// A packed <c>.app</c> updates in place, in whatever directory the user
-    /// dragged it to — the same thing Velopack means by portable on macOS.
+    /// dragged it to, which is the same thing Velopack means by portable on macOS.
     /// </summary>
     public override bool IsPortable => true;
 
@@ -91,7 +91,7 @@ public sealed class VidraCatalystLocator : VelopackLocator
     /// <summary>
     /// Reads the app's identity out of the <c>.app</c> the running process
     /// lives in. Everything stays <see langword="null"/> when it is not in one
-    /// — an unpacked development build, say — which is the same answer
+    /// (an unpacked development build, say) which is the same answer
     /// Velopack's own locators give, and it makes
     /// <c>UpdateManager.IsInstalled</c> false rather than throwing.
     /// </summary>
@@ -120,7 +120,7 @@ public sealed class VidraCatalystLocator : VelopackLocator
             var metadataPath = Path.Combine(macosDir, SpecVersionFileName);
             var resourcesMetadataPath = Path.Combine(contentsDir, "Resources", SpecVersionFileName);
 
-            // Both locations, in this order — `vpk pack` writes the manifest
+            // Both locations, in this order: `vpk pack` writes the manifest
             // twice and the copy under `Contents/MacOS` is the canonical one.
             if (File.Exists(updateExe)
                 && (PackageManifest.TryParseFromFile(metadataPath, out var manifest)
@@ -173,11 +173,11 @@ public sealed class VidraCatalystLocator : VelopackLocator
 
     /// <summary>
     /// Velopack's <c>TempUtil.GetDefaultTempBaseDirectory()</c>, which is
-    /// internal — reproduced so <see cref="AppTempDir"/> matches theirs.
+    /// internal, reproduced here so <see cref="AppTempDir"/> matches theirs.
     /// </summary>
     /// <remarks>
     /// Their last branch throws <c>PlatformNotSupportedException</c> on any OS
-    /// that is not Windows, OSX or Linux — which is Catalyst, the one platform
+    /// that is not Windows, OSX or Linux, which is Catalyst, the one platform
     /// this class exists for. In practice macOS always sets <c>TMPDIR</c>, so
     /// the environment branch above it wins and the two agree; the fallback
     /// here is <c>Path.GetTempPath()</c> rather than a throw, because a
@@ -216,7 +216,7 @@ public sealed class VidraCatalystLocator : VelopackLocator
     /// <remarks>
     /// Velopack's own <c>CombinedVelopackLogger</c> does this, but it and the
     /// <c>CombinedLogger</c> property that feeds <c>VelopackLocator.Log</c> are
-    /// both <c>internal</c> — so a locator outside their assembly has to bring
+    /// both <c>internal</c>, so a locator outside their assembly has to bring
     /// its own. One consequence worth knowing: the base class's
     /// <c>AddLogger</c> writes to that internal field and is not virtual, so
     /// <c>VelopackApp.Build().SetLogger(...)</c> does not reach this locator.

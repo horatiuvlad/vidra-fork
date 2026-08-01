@@ -21,8 +21,8 @@ namespace Vidra.Updates.Native;
 /// Measured in a packaged Catalyst app: the locator worked, the app reported
 /// itself installed at the right version, and then the very first request to
 /// the feed threw before a byte moved. This is the second thing Velopack does
-/// that assumes a platform it never claimed to support, and — like the locator
-/// — it is fixed through an extension point they made <c>virtual</c> on purpose.
+/// that assumes a platform it never claimed to support, and like the locator
+/// it is fixed through an extension point they made <c>virtual</c> on purpose.
 /// </para>
 /// <para>
 /// Everything else about the handler is theirs, deliberately: redirects are
@@ -37,7 +37,7 @@ public sealed class VidraCatalystDownloader : HttpClientFileDownloader
 
     /// <summary>
     /// The handler this downloader uses. Public so a test can assert the one
-    /// thing that matters about it — that nothing touches
+    /// thing that matters about it: that nothing touches
     /// <see cref="HttpClientHandler.MaxAutomaticRedirections"/>.
     /// </summary>
     public static HttpClientHandler CreateHandler()

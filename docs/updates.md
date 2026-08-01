@@ -8,7 +8,7 @@ Vidra apps update in two tiers. Use either, both, or neither.
 | **[Native](#native-whole-app-updates)** | the whole app, native code included | Velopack replaces the install in place | `Vidra.Updates.Native` + `vpk` |
 
 Most of this document is about the first. It is the one you reach for weekly: a
-bundle is small, needs no installer, and can never get ahead of the binary —
+bundle is small, needs no installer, and can never get ahead of the binary,
 it installs only when its contract fingerprints match the running host. The
 second is for the releases that change C#.
 
@@ -277,7 +277,7 @@ easiest way to point a build at staging without rebuilding it.
 
 ## Native (whole-app) updates
 
-For the releases that change C#. Vidra drives [Velopack](https://velopack.io) —
+For the releases that change C#. Vidra drives [Velopack](https://velopack.io),
 `vidra build` shells out to `vpk`, and the app talks to Velopack's client
 directly. Vidra owns neither; what it adds is the plumbing, and a locator that
 teaches Velopack what Mac Catalyst is.
@@ -293,7 +293,7 @@ dotnet tool install -g vpk
 **2. Reference the package** in your host `.csproj`:
 
 ```xml
-<PackageReference Include="Vidra.Updates.Native" Version="…" />
+<PackageReference Include="Vidra.Updates.Native" Version="0.4.0" />
 ```
 
 **3. Uncomment the two lines** the template already shipped in
@@ -301,7 +301,7 @@ dotnet tool install -g vpk
 the builder call:
 
 ```csharp
-// Platforms/*/Program.cs — before anything else runs
+// Platforms/*/Program.cs: before anything else runs
 VelopackApp.Build().UseVidraLocator().Run();
 ```
 
@@ -330,7 +330,7 @@ package reference cannot retrofit.
 ```
 
 The two `feedUrl`s differ in kind: the OTA one names a *file*, the native one
-names the *directory* `vpk` writes into. They can be the same prefix —
+names the *directory* `vpk` writes into. They can be the same prefix,
 `releases.{channel}.json` and `bundles.json` never collide.
 
 Then release:
@@ -350,7 +350,7 @@ What comes out, beside the usual artifact:
 
 | file | what it is |
 |---|---|
-| `dist/<App>-<version>-Setup.exe` | the Windows installer — the recommended download |
+| `dist/<App>-<version>-Setup.exe` | the Windows installer, and the recommended download |
 | `dist/<App>-<version>-windows.zip` | Velopack's portable archive, under the name the ZIP target always used |
 | `dist/<App>-<version>-macos.dmg` | the DMG, now wrapping the *packed* `.app` |
 | `dist/release/` | the feed: packages, deltas, `releases.{channel}.json` |
@@ -358,12 +358,12 @@ What comes out, beside the usual artifact:
 ### Things worth knowing before you ship one
 
 - **`vpk` refuses to re-publish a version.** Packing a version equal to or lower
-  than the newest in the feed fails and writes nothing — no overwrite, no second
+  than the newest in the feed fails and writes nothing. No overwrite, no second
   package under one number. Bump the version.
 - **Every release keeps a full package in the feed**, not just a delta: older
   installs delta against them, so they cannot be pruned blindly.
 - **Velopack signs everything it packages**, including its own `Setup.exe` and
-  `Update.exe`, given a certificate — the binaries SmartScreen actually judges.
+  `Update.exe`, given a certificate, which are the binaries SmartScreen actually judges.
   It uses the same identity `vidra build` resolved.
 - **On macOS `vpk` re-signs with `--deep`**, which Vidra's own signing avoids.
   The result verifies strictly, and whether it *notarizes* has never been
@@ -374,8 +374,8 @@ What comes out, beside the usual artifact:
   `VelopackApp.Run()` throws before any update logic executes.
 - **The two tiers do not coordinate, and do not need to.** Both check in the
   background, both apply on the next launch, and the native one wins the launch
-  it lands on. A native update cannot destroy OTA state — app data lives outside
-  the directory Velopack replaces — and a bundle chosen against the old contract
+  it lands on. A native update cannot destroy OTA state: because app data lives outside
+  the directory Velopack replaces, and a bundle chosen against the old contract
   is dropped at startup when the fingerprints stop matching.
 
 ## Reference

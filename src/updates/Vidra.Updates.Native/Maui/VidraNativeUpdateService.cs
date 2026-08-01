@@ -11,7 +11,7 @@ public interface IVidraNativeUpdates
     /// <summary>
     /// Whether this process is running from a Velopack install at all. False
     /// for a `dotnet run`, an unpacked build, or a bundle that was never packed
-    /// — in which case nothing here does anything.
+    ///, in which case nothing here does anything.
     /// </summary>
     bool IsInstalled { get; }
 
@@ -26,7 +26,7 @@ public interface IVidraNativeUpdates
     /// </summary>
     /// <remarks>
     /// "Nothing was staged" and "the check has not come back" look identical
-    /// without this — to an app deciding whether to show a prompt, and to a test
+    /// without this, both to an app deciding whether to show a prompt, and to a test
     /// waiting for a verdict, which otherwise waits out its whole timeout on
     /// every negative case.
     /// </remarks>
@@ -77,7 +77,7 @@ internal sealed class VidraNativeUpdateService(VidraNativeUpdateOptions options)
     /// </summary>
     /// <remarks>
     /// Velopack takes an exclusive lock over the packages directory while it
-    /// downloads, so two overlapping checks are not merely wasteful — the
+    /// downloads, so two overlapping checks are not merely wasteful, since the
     /// second fails with <c>AcquireLockFailedException</c>. That is not
     /// hypothetical: the startup check and an app-initiated
     /// <see cref="CheckNowAsync"/> raced on the first CI run of the Windows
@@ -127,7 +127,7 @@ internal sealed class VidraNativeUpdateService(VidraNativeUpdateOptions options)
     {
         // A release is already downloaded and waiting for this process to exit.
         // Checking again would find nothing newer and report "no update",
-        // which is true and useless — the caller wants to know an update is
+        // which is true and useless: the caller wants to know an update is
         // coming, and it already is.
         if (_downloaded is not null && LastCheck is { Outcome: NativeUpdateOutcome.Downloaded })
             return LastCheck;
@@ -252,7 +252,7 @@ internal sealed class VidraNativeUpdateService(VidraNativeUpdateOptions options)
             // An explicit source rather than the URL overload, so the platform
             // that needs its own downloader can have one. Velopack's default
             // lowers MaxAutomaticRedirections, which Mac Catalyst refuses
-            // outright — measured in a packaged app, on the first request to
+            // outright. Measured in a packaged app, on the first request to
             // the feed, after everything else had worked.
             _manager = new UpdateManager(
                 new SimpleWebSource(settings.FeedUrl, VidraNativeUpdates.FileDownloader),
@@ -272,7 +272,7 @@ internal sealed class VidraNativeUpdateService(VidraNativeUpdateOptions options)
 
     /// <summary>
     /// Code, then environment, then the file <c>vidra build</c> stamped in.
-    /// Resolved once — the answer cannot change while the process runs, and a
+    /// Resolved once: the answer cannot change while the process runs, and a
     /// per-check read would mean a package-file open on every timer tick.
     /// </summary>
     private async Task<NativeUpdateSettings> ResolveAsync()
