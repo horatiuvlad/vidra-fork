@@ -4,7 +4,23 @@ import { execSync } from "node:child_process";
 import { parseArgs } from "../utils.js";
 import { formatBuildError, formatProcessError } from "../exec.js";
 import { resolveAppVersion, versionPublishArgs } from "../version.js";
-import { readUpdateConfig, stampUpdateConfig, UPDATE_CONFIG_FILE } from "../update-config.js";
+import {
+  readUpdateConfig,
+  stampUpdateConfig,
+  UPDATE_CONFIG_FILE,
+  type UpdateConfig,
+} from "../update-config.js";
+import {
+  extractPackedApp,
+  NativeUpdateConfigError,
+  NativeUpdateError,
+  RELEASE_DIR,
+  resolveNativeUpdateSettings,
+  runNativeUpdate,
+  type NativeUpdateOutcome,
+  type NativeUpdateSettings,
+} from "../native-update.js";
+import { resolveVpk } from "../velopack.js";
 import {
   detectPlatform,
   detectProject,
@@ -64,6 +80,10 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
   const verbose = !!args["verbose"];
   const plan = !!args["plan"] || !!args["dry-run"];
+  // Opt-in per build, configured in package.json. A flag rather than pure
+  // config because packing publishes a release into a feed — a side effect no
+  // build should acquire by someone adding a block to a file.
+  const nativeUpdate = !!args["native-update"];
   const targetName = (args["target"] as string) || detectPlatform();
 
   const target = TARGETS[targetName];
@@ -92,8 +112,31 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   // The plan view prints every step and artifact name without running anything
   // — the dim footer says how to commit. `--execute` is the default; `--plan`
   // (alias `--dry-run`) opts into the preview.
+  const updateConfig = readUpdateConfig(project.root);
+
+  // Fail before the five-minute publish, not after it: a native-update build
+  // with nothing configured cannot produce a feed, and finding that out at the
+  // pack step wastes the whole build.
+  let nativeSettings: NativeUpdateSettings | null = null;
+  if (nativeUpdate) {
+    try {
+      nativeSettings = resolveNativeUpdateSettings({
+        config: updateConfig?.native,
+        csprojPath: project.csprojPath,
+        projectName: project.projectName,
+        version: project.displayVersion,
+      });
+    } catch (error) {
+      if (!(error instanceof NativeUpdateConfigError)) throw error;
+      console.error();
+      console.error(row({ glyph: "error", label: "native update", labelWidth: LABEL_WIDTH, detail: dim(error.message) }));
+      console.error();
+      process.exit(1);
+    }
+  }
+
   if (plan) {
-    printBuildPlan(project, target);
+    printBuildPlan(project, target, nativeSettings);
     console.log();
     console.log(
       footer(`${dim("nothing has run. re-run without")} ${lime("--plan")} ${dim("to apply.")}`),
@@ -109,7 +152,7 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
 
   stepBuildUi(project, verbose);
   stepCopyAssets(project);
-  stepStampUpdateConfig(project);
+  stepStampUpdateConfig(project, updateConfig);
   const publishDir = stepDotnetPublish(project, target, verbose);
 
   const bundlePath = target.findBundle(publishDir, project.projectName);
@@ -124,9 +167,9 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   }
 
   const io = { verbose, log: console.log, warn: console.warn };
+  const entitlements = target.name === "macos" ? entitlementsPath(project) : null;
 
   if (target.name === "macos") {
-    const entitlements = entitlementsPath(project);
     signMacAppBundleIfPossible(bundlePath, {
       ...io,
       purpose: "distribution",
@@ -157,7 +200,22 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
     }
   }
 
-  const outputPath = await stepPackage(project, target, bundlePath);
+  // With native updates on, Velopack produces the release *and* the artifact:
+  // the DMG wraps the packed `.app`, and the Windows ZIP is the one `vpk` wrote
+  // rather than one we roll by hand. Both keep today's artifact name, so
+  // nothing downstream of `vidra build` has to know which path ran.
+  const packed = nativeSettings
+    ? stepNativeUpdate(project, target, bundlePath, entitlements, nativeSettings, io)
+    : null;
+
+  const outputPath =
+    packed && target.name === "windows"
+      ? stepPublishVelopackWindowsArtifacts(project, target, packed)
+      : await stepPackage(
+          project,
+          target,
+          packed ? extractPackedApp(packed.outputs.portableZip!) : bundlePath,
+        );
 
   if (target.name === "macos") {
     signMacDmgIfPossible(outputPath, io);
@@ -272,7 +330,11 @@ const reportGatekeeper = (artifactPath: string): void => {
   );
 };
 
-const printBuildPlan = (project: ProjectInfo, target: BuildTarget): void => {
+const printBuildPlan = (
+  project: ProjectInfo,
+  target: BuildTarget,
+  nativeSettings: NativeUpdateSettings | null,
+): void => {
   console.log(
     row({
       glyph: "done",
@@ -297,6 +359,30 @@ const printBuildPlan = (project: ProjectInfo, target: BuildTarget): void => {
       detail: `${dim("Release \u00b7")} ${value(target.framework)}`,
     }),
   );
+
+  if (nativeSettings) {
+    const vpk = resolveVpk();
+    console.log(
+      row({
+        glyph: vpk ? "done" : "error",
+        label: "vpk pack",
+        labelWidth: LABEL_WIDTH,
+        detail: vpk
+          ? `${value(`${nativeSettings.packId} ${nativeSettings.packVersion}`)} ${dim(`\u2192 ${RELEASE_DIR}`)}`
+          : dim("vpk is not installed \u2014 dotnet tool install -g vpk"),
+      }),
+    );
+    console.log(
+      row({
+        glyph: nativeSettings.feedUrl ? "active" : "manual",
+        label: "merge feed",
+        labelWidth: LABEL_WIDTH,
+        detail: nativeSettings.feedUrl
+          ? `${dim("vpk download \u2190")} ${value(nativeSettings.feedUrl)}`
+          : dim("no vidra.updates.native.feedUrl \u2014 the release is packed, and no app will find it"),
+      }),
+    );
+  }
 
   if (target.name === "macos") {
     const developerId = hasDeveloperIdIdentity();
@@ -371,9 +457,21 @@ const printBuildPlan = (project: ProjectInfo, target: BuildTarget): void => {
         glyph: "active",
         label: "package ZIP",
         labelWidth: LABEL_WIDTH,
-        detail: `${dim("self-contained \u2192")} ${value(artifactName(project, target))}`,
+        detail: nativeSettings
+          ? `${dim("vpk's portable zip \u2192")} ${value(artifactName(project, target))}`
+          : `${dim("self-contained \u2192")} ${value(artifactName(project, target))}`,
       }),
     );
+    if (nativeSettings) {
+      console.log(
+        row({
+          glyph: "active",
+          label: "installer",
+          labelWidth: LABEL_WIDTH,
+          detail: `${dim("\u2192")} ${value(`${project.projectName}-${project.displayVersion}-Setup.exe`)}`,
+        }),
+      );
+    }
   }
 };
 
@@ -441,8 +539,7 @@ const stepCopyAssets = (project: ProjectInfo): void => {
  * feed URL at startup without the developer writing any C#. Runs after the asset
  * copy because it writes into the same `Resources/Raw` directory.
  */
-const stepStampUpdateConfig = (project: ProjectInfo): void => {
-  const config = readUpdateConfig(project.root);
+const stepStampUpdateConfig = (project: ProjectInfo, config: UpdateConfig | null): void => {
   stampUpdateConfig(project.hostDir, config);
 
   if (!config) {
@@ -525,6 +622,154 @@ const stepDotnetPublish = (
   );
 
   return path.join(project.hostDir, "bin", "Release", target.framework);
+};
+
+/**
+ * Runs `vpk download` then `vpk pack`, and reports what came out.
+ *
+ * Everything Velopack needs is something the build already resolved: the signed
+ * bundle, the identity, the entitlements, the version out of `package.json`.
+ * That is the whole argument for `vpk` being a build step rather than a
+ * separate publish command — there is no second place to keep any of it in step.
+ */
+const stepNativeUpdate = (
+  project: ProjectInfo,
+  target: BuildTarget,
+  packDir: string,
+  entitlements: string | null,
+  settings: NativeUpdateSettings,
+  io: { verbose: boolean; log: (m: string) => void; warn: (m: string) => void },
+): NativeUpdateOutcome => {
+  const start = Date.now();
+
+  let outcome: NativeUpdateOutcome;
+  try {
+    outcome = runNativeUpdate({
+      projectRoot: project.root,
+      settings,
+      packDir,
+      target: target.name as "macos" | "windows",
+      entitlements,
+      io,
+    });
+  } catch (error) {
+    if (!(error instanceof NativeUpdateError)) throw error;
+    console.error(
+      row({
+        glyph: "error",
+        label: "native update",
+        labelWidth: LABEL_WIDTH,
+        detail: dim(error.message),
+      }),
+    );
+    if (error.detail) console.error(footer(dim(error.detail)));
+    process.exit(1);
+  }
+
+  if (outcome.merged === "no-feed") {
+    // The build still produces a release; the app just has nowhere to look.
+    console.log(
+      row({
+        glyph: "manual",
+        label: "merge feed",
+        labelWidth: LABEL_WIDTH,
+        detail: dim("no vidra.updates.native.feedUrl — this release is packed but the app will never check for it"),
+      }),
+    );
+  } else if (outcome.merged === "empty-feed") {
+    console.log(
+      row({
+        glyph: "manual",
+        label: "merge feed",
+        labelWidth: LABEL_WIDTH,
+        detail: dim("nothing downloaded — first release, or the feed is unreachable (see the warning above)"),
+      }),
+    );
+  } else {
+    console.log(
+      row({
+        glyph: "done",
+        label: "merge feed",
+        labelWidth: LABEL_WIDTH,
+        detail: `${dim("vpk download →")} ${value(RELEASE_DIR)}`,
+      }),
+    );
+  }
+
+  const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  console.log(
+    row({
+      glyph: "done",
+      label: "vpk pack",
+      labelWidth: LABEL_WIDTH,
+      detail: `${value(`${settings.packId} ${settings.packVersion}`)} ${dim(
+        `→ ${RELEASE_DIR} (${elapsed}s)`,
+      )}`,
+    }),
+  );
+
+  if (!outcome.outputs.portableZip) {
+    console.error(
+      row({
+        glyph: "error",
+        label: "vpk pack",
+        labelWidth: LABEL_WIDTH,
+        detail: dim(`vpk wrote no portable archive to ${RELEASE_DIR}`),
+      }),
+    );
+    process.exit(1);
+  }
+
+  return outcome;
+};
+
+/**
+ * Windows: republish Velopack's own artifacts under the names `vidra build`
+ * already promises.
+ *
+ * The portable zip *is* the self-contained ZIP this target used to roll by
+ * hand, so it takes that name. `Setup.exe` is versioned on the way out because
+ * `vpk pack` overwrites it in the output directory on every release — a
+ * publisher who packs two versions into one prefix otherwise keeps only the
+ * newest installer, which is how "install 1.0.0" once silently installed 1.0.1.
+ */
+const stepPublishVelopackWindowsArtifacts = (
+  project: ProjectInfo,
+  target: BuildTarget,
+  packed: NativeUpdateOutcome,
+): string => {
+  const outputDir = path.join(project.root, "dist");
+  fs.ensureDirSync(outputDir);
+
+  const zipPath = path.join(outputDir, artifactName(project, target));
+  fs.copySync(packed.outputs.portableZip!, zipPath, { overwrite: true });
+
+  console.log(
+    row({
+      glyph: "done",
+      label: packageLabel(target),
+      labelWidth: LABEL_WIDTH,
+      detail: `${value(path.basename(zipPath))} ${dim(
+        `(${(fs.statSync(zipPath).size / (1024 * 1024)).toFixed(1)} MB, from vpk)`,
+      )}`,
+    }),
+  );
+
+  if (packed.outputs.setupExe) {
+    const setupName = `${project.projectName}-${project.displayVersion}-Setup.exe`;
+    const setupPath = path.join(outputDir, setupName);
+    fs.copySync(packed.outputs.setupExe, setupPath, { overwrite: true });
+    console.log(
+      row({
+        glyph: "done",
+        label: "installer",
+        labelWidth: LABEL_WIDTH,
+        detail: `${value(setupName)} ${dim("— the recommended download; updates apply in place")}`,
+      }),
+    );
+  }
+
+  return zipPath;
 };
 
 const stepPackage = async (

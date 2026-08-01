@@ -1,0 +1,298 @@
+import path from "node:path";
+import os from "node:os";
+import fs from "fs-extra";
+import { execFileSync } from "node:child_process";
+import type { NativeUpdateConfig } from "./update-config.js";
+import {
+  downloadArgs,
+  findMacMainExe,
+  findVpkOutputs,
+  packArgs,
+  resolveVpk,
+  runVpk,
+  type VpkOutputs,
+} from "./velopack.js";
+import { resolveMacCodeSigningIdentity } from "./signing.js";
+import { resolveWindowsSigningConfig, timestampUrl } from "./windows-signing.js";
+
+/**
+ * The Velopack half of `vidra build`.
+ *
+ * Vidra owns none of Velopack: `vpk` is a build-time tool the CLI shells out
+ * to, and the app talks to `UpdateManager` directly. What lives here is the
+ * plumbing that makes `vpk` part of a build — resolving what to pack, merging
+ * from the live feed first, and handing the tool the identity `vidra build`
+ * already resolved.
+ */
+
+/** Where the native feed lands, relative to the project root. */
+export const RELEASE_DIR = path.join("dist", "release");
+
+/**
+ * `vpk` rejects `--signEntitlements` unless the file name ends in
+ * `.entitlements`, and the MacCatalyst SDK requires the file to be called
+ * `Entitlements.plist`. Nothing can satisfy both, so the build copies.
+ */
+export const entitlementsCopyName = (packId: string): string => `${packId}.entitlements`;
+
+export interface NativeUpdateSettings {
+  packId: string;
+  packVersion: string;
+  feedUrl: string | null;
+  channel: string | null;
+}
+
+export class NativeUpdateConfigError extends Error {}
+
+/**
+ * Settles what `vpk pack` is being asked to produce.
+ *
+ * The pack id is the app id the developer already chose: it names Velopack's
+ * install directory (`%LOCALAPPDATA%\<packId>\`) and keys its feed, so deriving
+ * it from `<ApplicationId>` keeps one identity rather than introducing a second
+ * one nobody would remember to keep in step.
+ */
+export const resolveNativeUpdateSettings = (opts: {
+  config: NativeUpdateConfig | undefined;
+  csprojPath: string;
+  projectName: string;
+  version: string;
+}): NativeUpdateSettings => {
+  const config = opts.config ?? {};
+
+  if (config.enabled === false) {
+    throw new NativeUpdateConfigError(
+      'vidra.updates.native.enabled is false — remove --native-update, or set it to true',
+    );
+  }
+
+  const packId =
+    config.packId ?? readApplicationId(opts.csprojPath) ?? opts.projectName;
+
+  if (!config.feedUrl) {
+    // Not fatal on its own: a build can produce a release the developer uploads
+    // by hand. But the *app* cannot check a feed it was never told about, so a
+    // build that packs without one produces an installer that never updates —
+    // which is exactly the silent half-configured state `vidra doctor` exists
+    // to catch.
+    return { packId, packVersion: opts.version, feedUrl: null, channel: config.channel ?? null };
+  }
+
+  return {
+    packId,
+    packVersion: opts.version,
+    feedUrl: config.feedUrl,
+    channel: config.channel ?? null,
+  };
+};
+
+/** `<ApplicationId>` out of the host csproj. */
+export const readApplicationId = (csprojPath: string): string | null => {
+  if (!fs.existsSync(csprojPath)) return null;
+  const xml = fs.readFileSync(csprojPath, "utf-8");
+  return xml.match(/<ApplicationId>([^<]+)<\/ApplicationId>/)?.[1]?.trim() || null;
+};
+
+/**
+ * `--signParams` for `vpk pack` on Windows, mirroring what `vidra build` passes
+ * to `signtool` directly.
+ *
+ * Velopack signs everything it packages with an embedded `signtool` — 63 files
+ * on the probe, including its own `Setup.exe` and `Update.exe`, which are the
+ * binaries SmartScreen actually judges. `vidra build` signs one file, so this
+ * is a strict improvement wherever a certificate exists.
+ */
+export const windowsSignParams = (): string | null => {
+  const config = resolveWindowsSigningConfig();
+  if (!config) return null;
+
+  const parts = ["/fd", "SHA256", "/tr", timestampUrl(), "/td", "SHA256"];
+  if (config.mode === "pfx") {
+    parts.push("/f", config.pfxPath);
+    if (config.password) parts.push("/p", config.password);
+  } else {
+    parts.push("/sha1", config.thumbprint);
+  }
+  return parts.join(" ");
+};
+
+export interface NativeUpdateIo {
+  verbose: boolean;
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+export interface NativeUpdateOutcome {
+  releaseDir: string;
+  outputs: VpkOutputs;
+  /** What `vpk download` did, for reporting. */
+  merged: "merged" | "empty-feed" | "no-feed";
+}
+
+export class NativeUpdateError extends Error {
+  constructor(message: string, readonly detail: string = "") {
+    super(message);
+  }
+}
+
+/**
+ * Downloads the live feed, then packs this build into it.
+ *
+ * Order matters and is not a preference. `vpk pack` merges with whatever is
+ * already in `--outputDir`: that is how a 191 KB delta against a 94 MB package
+ * happens, and equally how packing into an empty directory publishes an index
+ * containing only the newest release, stranding every older install.
+ */
+export const runNativeUpdate = (opts: {
+  projectRoot: string;
+  settings: NativeUpdateSettings;
+  /** The `.app` on macOS, the publish directory on Windows. */
+  packDir: string;
+  target: "macos" | "windows";
+  /** The `Entitlements.plist` the build signed with, if any. */
+  entitlements: string | null;
+  io: NativeUpdateIo;
+}): NativeUpdateOutcome => {
+  const vpk = resolveVpk();
+  if (!vpk) {
+    throw new NativeUpdateError(
+      "vpk is not installed",
+      "dotnet tool install -g vpk",
+    );
+  }
+
+  const releaseDir = path.join(opts.projectRoot, RELEASE_DIR);
+  fs.ensureDirSync(releaseDir);
+
+  const merged = mergeFromLiveFeed(vpk, opts.settings, releaseDir, opts.io);
+
+  const mainExe =
+    opts.target === "macos"
+      ? findMacMainExe(opts.packDir)
+      : findWindowsMainExe(opts.packDir);
+
+  if (!mainExe) {
+    throw new NativeUpdateError(
+      `could not find the app executable inside ${opts.packDir}`,
+    );
+  }
+
+  const args = packArgs({
+    packId: opts.settings.packId,
+    packVersion: opts.settings.packVersion,
+    packDir: opts.packDir,
+    mainExe,
+    outputDir: releaseDir,
+    channel: opts.settings.channel,
+    ...(opts.target === "macos"
+      ? {
+          // Velopack has to own signing: it adds files to a sealed bundle
+          // *after* the build signed it, which breaks the seal. Handing it the
+          // same identity and entitlements puts the packed bundle back on the
+          // baseline's row — Developer ID authority, hardened runtime, all
+          // three JIT entitlements, strict and deep verification passing.
+          signAppIdentity: resolveMacCodeSigningIdentity("distribution"),
+          signEntitlements: opts.entitlements
+            ? copyEntitlementsForVpk(opts.entitlements, opts.settings.packId)
+            : null,
+          keychain: process.env.VIDRA_MACOS_KEYCHAIN?.trim() || null,
+        }
+      : { signParams: windowsSignParams() }),
+  });
+
+  const result = runVpk(vpk, args, { cwd: opts.projectRoot, verbose: opts.io.verbose });
+
+  if (!result.ok) {
+    if (result.alreadyReleased) {
+      throw new NativeUpdateError(
+        `${opts.settings.packVersion} is already in the feed — nothing was written`,
+        "bump the version in package.json (npm version patch), or drop --native-update to rebuild the installer only",
+      );
+    }
+    throw new NativeUpdateError("vpk pack failed", result.output);
+  }
+
+  return { releaseDir, outputs: findVpkOutputs(releaseDir), merged };
+};
+
+/**
+ * A feed that is not there yet is the normal first release, not an error — but
+ * a feed that exists and could not be read is a real risk of publishing an
+ * index that drops every previous entry, so it stops the build.
+ */
+const mergeFromLiveFeed = (
+  vpk: string,
+  settings: NativeUpdateSettings,
+  releaseDir: string,
+  io: NativeUpdateIo,
+): NativeUpdateOutcome["merged"] => {
+  if (!settings.feedUrl) return "no-feed";
+
+  const result = runVpk(
+    vpk,
+    downloadArgs({
+      feedUrl: settings.feedUrl,
+      outputDir: releaseDir,
+      channel: settings.channel,
+    }),
+    { verbose: io.verbose },
+  );
+
+  if (result.ok) return "merged";
+
+  // vpk reports an empty or absent feed the same way it reports a typo'd URL.
+  // Distinguishing them from here is guesswork, so this warns loudly rather
+  // than either failing a legitimate first release or staying quiet about a
+  // feed the developer thinks is being merged.
+  io.warn(result.output.trim());
+  return "empty-feed";
+};
+
+/** `vpk` demands a `*.entitlements` name; MAUI demands `Entitlements.plist`. */
+const copyEntitlementsForVpk = (entitlements: string, packId: string): string => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vidra-vpk-"));
+  const target = path.join(dir, entitlementsCopyName(packId));
+  fs.copySync(entitlements, target);
+  return target;
+};
+
+const findWindowsMainExe = (publishDir: string): string | null => {
+  const entries = fs
+    .readdirSync(publishDir, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".exe"))
+    .map((e) => e.name);
+
+  // The host assembly's own exe, not a bundled tool. `createdump.exe` ships in
+  // every self-contained .NET publish and sorts first alphabetically.
+  return entries.find((e) => e.endsWith(".Host.exe")) ?? entries.find((e) => e !== "createdump.exe") ?? null;
+};
+
+/**
+ * Takes the packed `.app` back out of the portable zip Velopack just wrote.
+ *
+ * `ditto -x -k` rather than `unzip`: it preserves extended attributes and
+ * resource forks, which is why the probe could extract a packed bundle and
+ * still read a valid Developer ID signature off it.
+ */
+export const extractPackedApp = (portableZip: string): string => {
+  const staging = fs.mkdtempSync(path.join(os.tmpdir(), "vidra-packed-"));
+  execFileSync("ditto", ["-x", "-k", portableZip, staging], { stdio: "pipe" });
+
+  const found = findAppBundle(staging);
+  if (!found) {
+    throw new NativeUpdateError(`no .app inside ${path.basename(portableZip)}`);
+  }
+  return found;
+};
+
+const findAppBundle = (root: string, depth = 0): string | null => {
+  if (depth > 2 || !fs.existsSync(root)) return null;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(root, entry.name);
+    if (entry.name.endsWith(".app")) return full;
+    const nested = findAppBundle(full, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+};

@@ -13,10 +13,38 @@ import fs from "fs-extra";
  * host reads at startup. No block means no feed, which means the updater does
  * nothing at all.
  */
+/**
+ * The `native` sub-block — Velopack's half of the same surface.
+ *
+ * One `vidra.updates` block configures both tiers, and one prefix can serve
+ * both: `releases.{channel}.json` and `bundles.json` never collide. The two
+ * feeds are separate fields anyway, because the OTA one names a file
+ * (`.../bundles.json`) and Velopack's names the directory it writes into.
+ */
+export interface NativeUpdateConfig {
+  /** Base URL of the directory `vpk pack` writes into. */
+  feedUrl?: string;
+  /**
+   * Velopack's channel, not Vidra's. Unset means Velopack's own default for the
+   * platform — `win` / `osx`, the names `vpk pack` puts in
+   * `releases.{channel}.json`.
+   */
+  channel?: string;
+  enabled?: boolean;
+  /**
+   * Velopack's application id: the name of its install directory and the key
+   * its feed is written under. Defaults to the host project's
+   * `<ApplicationId>`, which is the app id the developer already chose.
+   */
+  packId?: string;
+}
+
 export interface UpdateConfig {
   feedUrl?: string;
   channel?: string;
   enabled?: boolean;
+  /** Native (whole-app) updates. Absent means this app ships them the usual way. */
+  native?: NativeUpdateConfig;
   /**
    * Base64 SPKI public keys the app will accept a manifest from. More than one
    * so a key can be rotated: publish under the new key while installed apps
@@ -69,9 +97,35 @@ export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {
     config.publicKeys = keys.map((key) => key.trim());
   }
 
+  const native = readNativeConfig(raw.native);
+  if (native) {
+    config.native = native;
+  }
+
   // A block with nothing usable in it is the same as no block: better to ship no
   // config file than one that configures nothing.
   return Object.keys(config).length > 0 ? config : null;
+};
+
+const readNativeConfig = (raw: unknown): NativeUpdateConfig | null => {
+  if (!raw || typeof raw !== "object") return null;
+
+  const source = raw as Record<string, unknown>;
+  const native: NativeUpdateConfig = {};
+
+  const text = (key: keyof NativeUpdateConfig): void => {
+    const value = source[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      native[key] = value.trim() as never;
+    }
+  };
+
+  text("feedUrl");
+  text("channel");
+  text("packId");
+  if (typeof source.enabled === "boolean") native.enabled = source.enabled;
+
+  return Object.keys(native).length > 0 ? native : null;
 };
 
 /**

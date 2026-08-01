@@ -10,6 +10,9 @@ import {
 } from "./signing.js";
 import { resolveNotaryCredentials } from "./notarize.js";
 import { resolveWindowsSigningConfig } from "./windows-signing.js";
+import { resolveVpk, vpkVersion } from "./velopack.js";
+import { readUpdateConfig, type UpdateConfig } from "./update-config.js";
+import { tryDetectProject } from "./project.js";
 
 const DOTNET = process.platform === "win32" ? "dotnet.exe" : "dotnet";
 const MAUI_DOCS =
@@ -488,6 +491,149 @@ export const checkWebView2Runtime = (): Requirement => {
   };
 };
 
+/**
+ * Velopack's CLI. Reported as `unknown` rather than `missing` when it is absent
+ * and unconfigured: most apps never pack a native release, and a doctor that
+ * cries about a tool nobody asked for is a doctor people stop reading.
+ */
+export const checkVelopack = (required: boolean): Requirement => {
+  const vpk = resolveVpk();
+  if (vpk) {
+    const version = vpkVersion(vpk);
+    return {
+      name: "Velopack (vpk)",
+      status: "ok",
+      detail: version ? `${version} at ${vpk}` : vpk,
+    };
+  }
+
+  return {
+    name: "Velopack (vpk)",
+    status: required ? "missing" : "unknown",
+    detail: required
+      ? "vidra.updates.native is configured but vpk is not installed — `vidra build --native-update` cannot run"
+      : "not installed — only needed for `vidra build --native-update`",
+    fix: "dotnet tool install -g vpk",
+  };
+};
+
+/**
+ * The half-configured states, each of which produces an app that builds
+ * cleanly and never updates.
+ *
+ * This is the one part of the update story that cannot report itself. An app
+ * with no `vidra.updates` block logs nothing at runtime, deliberately — so a
+ * misspelled key is indistinguishable from "updates not wanted", and the
+ * symptom arrives much later, as nobody receiving an update.
+ *
+ * A pure function over what was read, so every state below is a unit test
+ * rather than a scaffolded app someone has to break by hand.
+ */
+export const diagnoseUpdateConfiguration = (input: {
+  config: UpdateConfig | null;
+  /** Source of `MauiProgram.cs`, or null when it could not be read. */
+  mauiProgram: string | null;
+  /** True when a `bundles.json` has been published but no `.sig` sits beside it. */
+  publishedUnsigned: boolean;
+}): Requirement[] => {
+  const { config } = input;
+  // Comments first. The scaffolded MauiProgram explains how to turn updates on,
+  // and that explanation names the very call being looked for — so a naive
+  // substring search reports every fresh app as already wired up.
+  const mauiProgram = input.mauiProgram === null ? null : stripComments(input.mauiProgram);
+  const usesUpdates = mauiProgram?.includes(".UseVidraUpdates(") ?? false;
+  const usesNative = mauiProgram?.includes(".UseVidraNativeUpdates(") ?? false;
+  const found: Requirement[] = [];
+
+  if (config && !usesUpdates && mauiProgram !== null) {
+    found.push({
+      name: "OTA updates wired up",
+      status: "missing",
+      detail: "package.json configures vidra.updates, but MauiProgram never calls .UseVidraUpdates()",
+      fix: "add .UseVidraUpdates() after .UseVidra() in MauiProgram.cs",
+    });
+  }
+
+  if (!config && usesUpdates) {
+    found.push({
+      name: "OTA updates configured",
+      status: "missing",
+      detail: ".UseVidraUpdates() is called, but package.json has no vidra.updates block — nothing is ever checked",
+      fix: 'add "vidra": { "updates": { "feedUrl": "…" } } to package.json',
+    });
+  }
+
+  if (input.publishedUnsigned && (config?.publicKeys?.length ?? 0) > 0) {
+    found.push({
+      name: "Feed signature",
+      status: "missing",
+      detail: "publicKeys are configured, so signatures are mandatory — but the published bundles.json has no .sig beside it",
+      fix: "republish with `vidra bundle --sign <key.pem>`",
+    });
+  }
+
+  if (config?.native) {
+    if (!usesNative && mauiProgram !== null) {
+      found.push({
+        name: "Native updates wired up",
+        status: "missing",
+        detail: "vidra.updates.native is configured, but MauiProgram never calls .UseVidraNativeUpdates()",
+        fix: "add .UseVidraNativeUpdates() after .UseVidra(), and reference Vidra.Updates.Native",
+      });
+    }
+    if (!config.native.feedUrl) {
+      found.push({
+        name: "Native feed",
+        status: "missing",
+        detail: "vidra.updates.native has no feedUrl — releases can be packed, and no installed app will ever find them",
+        fix: 'set "vidra": { "updates": { "native": { "feedUrl": "https://…/" } } }',
+      });
+    }
+  }
+
+  return found;
+};
+
+/**
+ * C# line and block comments, removed. Crude on purpose — it does not know
+ * about strings, and nothing here needs it to: the only question is whether a
+ * builder call is live code or the template explaining itself.
+ */
+const stripComments = (source: string): string =>
+  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+/** Reads what {@link diagnoseUpdateConfiguration} needs off disk. */
+const inspectUpdateConfiguration = (): Requirement[] => {
+  const project = tryDetectProject(process.cwd());
+  if (!project) return [];
+
+  const config = readUpdateConfig(project.root);
+  const mauiProgram = readIfPresent(path.join(project.hostDir, "MauiProgram.cs"));
+
+  // Nothing configured and nothing called: this app does not want updates, and
+  // saying so on every `doctor` run is noise.
+  const live = mauiProgram === null ? "" : stripComments(mauiProgram);
+  if (!config && !live.includes("Updates(")) {
+    return [];
+  }
+
+  const bundles = path.join(project.root, "dist", "bundles.json");
+  const publishedUnsigned = fs.existsSync(bundles) && !fs.existsSync(`${bundles}.sig`);
+
+  return [
+    ...(config?.native || resolveVpk() ? [checkVelopack(!!config?.native)] : []),
+    ...diagnoseUpdateConfiguration({ config, mauiProgram, publishedUnsigned }),
+  ];
+};
+
+const readIfPresent = (file: string): string | null => {
+  try {
+    return fs.readFileSync(file, "utf-8");
+  } catch {
+    return null;
+  }
+};
+
 // --- Reporting ---------------------------------------------------------------
 
 export const collectRequirements = (
@@ -510,6 +656,12 @@ export const collectRequirements = (
   if (process.platform === "win32") {
     reqs.push(checkWindowsSigning(), checkWebView2Runtime());
   }
+
+  const updateIssues = inspectUpdateConfiguration();
+  if (updateIssues.length > 0) {
+    reqs.push(...updateIssues);
+  }
+
   return reqs;
 };
 
