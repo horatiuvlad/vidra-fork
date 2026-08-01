@@ -6,7 +6,7 @@ namespace Vidra.Updates.Native.Tests;
 /// Where a native feed URL comes from, and which source wins.
 /// </summary>
 /// <remarks>
-/// Getting this wrong is silent by design — an app with no feed configured
+/// Getting this wrong is silent by design: an app with no feed configured
 /// logs nothing, because an updater that announces "no feed" on every launch of
 /// every app trains people to ignore the line that matters. Silent failure is
 /// exactly why the rules belong in a unit test rather than in a packaged app on
@@ -114,7 +114,7 @@ public sealed class NativeUpdateConfigTests
 
     /// <summary>
     /// Per field, not per source. Setting a channel in code must not throw away
-    /// the feed URL the build stamped in — that would be an app that silently
+    /// the feed URL the build stamped in, and that would be an app that silently
     /// stops updating the moment someone configures anything.
     /// </summary>
     [Fact]
@@ -179,7 +179,7 @@ public sealed class NativeUpdateConfigTests
 /// <remarks>
 /// Their downloader builds its handler with <c>MaxAutomaticRedirections = 10</c>.
 /// On Mac Catalyst <see cref="HttpClientHandler"/> is <c>NSUrlSessionHandler</c>,
-/// which refuses to have that lowered — measured in a packaged app, on the very
+/// which refuses to have that lowered. Measured in a packaged app, on the very
 /// first request to the feed, after the locator and everything else had worked:
 /// <c>ArgumentOutOfRangeException: It's not possible to lower the max number of
 /// automatic redirections.</c>

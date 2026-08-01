@@ -13,12 +13,12 @@ public static class VidraNativeUpdatesExtensions
     /// <para>
     /// With no arguments the app is configured by the <c>native</c> block of the
     /// <c>vidra.updates</c> section in its own <c>package.json</c>, which
-    /// <c>vidra build</c> stamps into the bundle — no feed URL there means
+    /// <c>vidra build</c> stamps into the bundle: no feed URL there means
     /// nothing is ever checked.
     /// </para>
     /// <para>
     /// This lives in its own package rather than in <c>Vidra.Hosting.Maui</c>
-    /// so an app that never asks for native updates carries no Velopack — the
+    /// so an app that never asks for native updates carries no Velopack: the
     /// same reasoning that keeps the OTA tier's dependencies out of apps that
     /// do not use it.
     /// </para>

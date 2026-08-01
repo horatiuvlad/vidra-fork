@@ -14,7 +14,7 @@ namespace Vidra.Updates.Native;
 /// <param name="FeedUrl">Base URL of the directory <c>vpk pack</c> writes into.</param>
 /// <param name="Channel">
 /// Velopack's channel, not Vidra's. Left unset it means Velopack's own default
-/// for the platform (<c>win</c> / <c>osx</c>) — the names <c>vpk pack</c> puts
+/// for the platform (<c>win</c> / <c>osx</c>): the names <c>vpk pack</c> puts
 /// in <c>releases.{channel}.json</c>.
 /// </param>
 /// <param name="Enabled">Master switch.</param>
@@ -33,7 +33,7 @@ public sealed record NativeUpdateSettings(string? FeedUrl = null, string? Channe
 /// </remarks>
 public static class NativeUpdateConfig
 {
-    /// <summary>The stamped file, shared with the OTA tier — one config surface.</summary>
+    /// <summary>The stamped file, shared with the OTA tier, so there is one config surface.</summary>
     public const string ConfigFileName = "vidra-updates.json";
 
     public const string FeedUrlEnvironmentVariable = "VIDRA_NATIVE_UPDATE_FEED_URL";
@@ -45,7 +45,7 @@ public static class NativeUpdateConfig
     /// <summary>
     /// Pulls the <c>native</c> block out of a stamped config document. A file
     /// that is missing, malformed, or has no <c>native</c> block all mean the
-    /// same thing — nothing configured — because an updater that throws on
+    /// same thing (nothing configured) because an updater that throws on
     /// startup is worse than one that does nothing.
     /// </summary>
     public static NativeUpdateSettings ParseStampedFile(string? json)
@@ -77,7 +77,7 @@ public static class NativeUpdateConfig
     /// <summary>
     /// Reads the same settings out of an environment map. Taking the map as an
     /// argument rather than calling <see cref="Environment"/> keeps this a pure
-    /// function — the precedence rules are then testable without a test
+    /// function, so the precedence rules are then testable without a test
     /// mutating process state that another test can see.
     /// </summary>
     public static NativeUpdateSettings FromEnvironment(Func<string, string?> read)
@@ -93,7 +93,7 @@ public static class NativeUpdateConfig
     /// <summary>
     /// Settles the three sources, most specific first: what the app set in
     /// code, then the environment, then the stamped file. Per field, not per
-    /// source — setting a channel in code must not discard the feed URL the
+    /// source. Setting a channel in code must not discard the feed URL the
     /// build stamped in.
     /// </summary>
     /// <remarks>

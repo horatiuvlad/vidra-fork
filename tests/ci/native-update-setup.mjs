@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Turn a scaffolded app into one that ships native updates, the way a developer
-// would — and then set its payload marker for one release of the round-trip.
+// would, and then set its payload marker for one release of the round-trip.
 //
 //   node native-update-setup.mjs --project <dir> --name <Namespace> --version 1.0.0
 //                               [--feed <url>] [--main-page <file.cs.in>]
@@ -59,7 +59,7 @@ for (const entry of [
         "VelopackApp.Build().UseVidraLocator().Run();",
       );
     if (uncommented === cs) {
-      throw new Error(`${entry}: nothing was uncommented — the template's markers have drifted`);
+      throw new Error(`${entry}: nothing was uncommented, so the template's markers have drifted`);
     }
     return uncommented;
   });
@@ -68,7 +68,7 @@ for (const entry of [
 // 3. The builder call.
 edit(path.join(hostDir, "MauiProgram.cs"), (cs) => {
   // Comments first. The template explains how to turn native updates on, and
-  // that explanation names the very call being looked for — so a plain
+  // that explanation names the very call being looked for, so a plain
   // substring check reports the work as already done and silently skips it.
   const live = cs.replace(/\/\/[^\n]*/g, "");
   if (live.includes(".UseVidraNativeUpdates()")) return cs;

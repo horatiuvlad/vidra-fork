@@ -10,12 +10,12 @@ import { execFileSync } from "node:child_process";
  *
  * 1. **An argv array, never a shell string.** Signing identities contain spaces
  *    and parentheses (`Developer ID Application: Vidra CI (TESTTEAM01)`), and
- *    git-bash rewrites any argument that starts with `/` into a Windows path —
- *    which is how `--signParams "/sha1 … /fd SHA256"` once reached signtool
+ *    git-bash rewrites any argument that starts with `/` into a Windows path,
+ *    which is how `--signParams "/sha1 <thumb> /fd SHA256"` once reached signtool
  *    mangled and it reported "no file digest algorithm specified" for a flag
  *    that was plainly in the command line.
  * 2. **The argument vectors are pure functions.** They are unit-tested on Linux,
- *    where `vpk` will never be asked to pack a `.app` — which is exactly the
+ *    where `vpk` will never be asked to pack a `.app`, which is exactly the
  *    kind of thing that otherwise costs a fifteen-minute round trip on a
  *    platform runner to discover.
  */
@@ -42,7 +42,7 @@ export interface VpkPackOptions {
   channel?: string | null;
   /** macOS: a `Developer ID Application:` identity. */
   signAppIdentity?: string | null;
-  /** macOS: a file whose name ends in `.entitlements` — vpk rejects any other suffix. */
+  /** macOS: a file whose name ends in `.entitlements`: vpk rejects any other suffix. */
   signEntitlements?: string | null;
   /** macOS: a non-default keychain to sign from. */
   keychain?: string | null;
@@ -51,7 +51,7 @@ export interface VpkPackOptions {
 }
 
 export interface VpkDownloadOptions {
-  /** Base URL of the directory `vpk pack` writes into — not `bundles.json`. */
+  /** Base URL of the directory `vpk pack` writes into, not `bundles.json`. */
   feedUrl: string;
   outputDir: string;
   channel?: string | null;
@@ -70,7 +70,7 @@ export interface VpkResult {
  *
  * Signing is opt-in per platform and per option, because a build machine with
  * no certificate must still produce a working (unsigned) release rather than
- * failing — the same rule the rest of `vidra build` follows.
+ * failing, the same rule the rest of `vidra build` follows.
  */
 export const packArgs = (options: VpkPackOptions): string[] => {
   const args = [
@@ -113,7 +113,7 @@ export const downloadArgs = (options: VpkDownloadOptions): string[] => {
 };
 
 /**
- * Locates `vpk`. On PATH first, then the .NET global tools directory — which is
+ * Locates `vpk`. On PATH first, then the .NET global tools directory, which is
  * where `dotnet tool install -g vpk` puts it and which is *not* on PATH in a
  * shell that was started before the install.
  */
@@ -132,8 +132,8 @@ export const resolveVpk = (): string | null => {
  * The version of the installed `vpk`.
  *
  * There is no `--version`: it answers "Unrecognized command or argument". The
- * version is in the banner every command prints — `Velopack CLI 1.2.0, for
- * distributing applications.` — so ask for help and read that.
+ * version is in the banner every command prints: `Velopack CLI 1.2.0, for
+ * distributing applications.`, so ask for help and read that.
  */
 export const parseVpkVersion = (helpOutput: string): string | null =>
   helpOutput.match(/Velopack CLI\s+([\d][\w.+-]*)/i)?.[1] ?? null;
@@ -157,7 +157,7 @@ export const vpkVersion = (vpk: string): string | null => {
  *
  * **Measured** with vpk 1.2.0: packing a version equal to *or lower than* the
  * newest entry in the output directory's index fails with exit 255 and writes
- * nothing at all — the index, the packages and the installer are left exactly
+ * nothing at all. The index, the packages and the installer are left exactly
  * as they were. So re-running a build at an already-published version is safe;
  * it is just not a no-op, and the developer deserves to be told which of the
  * two things they meant rather than being handed a stack trace.
@@ -194,8 +194,8 @@ export const runVpk = (
  * The name of the executable inside a Mac Catalyst bundle that is actually the
  * app.
  *
- * After `vpk pack` there are three entries in `Contents/MacOS` — the app, the
- * updater, and a manifest — and taking the first one launches `UpdateMac`,
+ * After `vpk pack` there are three entries in `Contents/MacOS`, namely the app, the
+ * updater, and a manifest, and taking the first one launches `UpdateMac`,
  * which starts, prints "No known subcommand was used", and exits. That is
  * indistinguishable from an app that never booted, and it cost a CI round trip
  * once already.
@@ -205,7 +205,7 @@ export const findMacMainExe = (appBundle: string): string | null => {
   if (!fs.existsSync(macos)) return null;
 
   // `CFBundleExecutable` is macOS's own answer to this question, and it is
-  // there before Velopack has been anywhere near the bundle — which is the case
+  // there before Velopack has been anywhere near the bundle, which is the case
   // that matters, since this runs on the freshly built `.app`.
   const declaredByPlist = readBundleExecutable(appBundle);
   if (declaredByPlist && fs.existsSync(path.join(macos, declaredByPlist))) return declaredByPlist;
@@ -222,7 +222,7 @@ export const findMacMainExe = (appBundle: string): string | null => {
 };
 
 /**
- * `CFBundleExecutable` out of `Contents/Info.plist` — which binary the OS
+ * `CFBundleExecutable` out of `Contents/Info.plist`, which binary the OS
  * launches when the bundle is opened.
  *
  * Read with a regex rather than `plutil` so the same code answers on any host;

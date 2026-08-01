@@ -204,9 +204,9 @@ describe("newestPackVersion", () => {
 
 /**
  * Every state below produces an app that builds cleanly and never updates. The
- * updater is silent by design when nothing is configured — an updater that
+ * updater is silent by design when nothing is configured: an updater that
  * announces "no feed" on every launch of every app trains people to ignore the
- * line that matters — so this is the only place a typo can surface.
+ * line that matters, so this is the only place a typo can surface.
  */
 describe("diagnoseUpdateConfiguration", () => {
   const clean = {

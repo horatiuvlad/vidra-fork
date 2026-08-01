@@ -59,7 +59,7 @@ describe("resolveNativeUpdateSettings", () => {
 
   /**
    * Not cosmetic. `vpk pack` renames the bundle to `<packTitle ?? packId>.app`,
-   * so leaving the title out ships an app called `com.example.notes.app` — and
+   * so leaving the title out ships an app called `com.example.notes.app`: and
    * that is the name a user sees in /Applications forever after.
    */
   it("takes the pack title from <ApplicationTitle>", () => {
@@ -105,7 +105,7 @@ describe("entitlementsCopyName", () => {
   /**
    * `vpk` rejects `--signEntitlements` unless the name ends in
    * `.entitlements`; the MacCatalyst SDK requires `Entitlements.plist`.
-   * Nothing satisfies both, so the build copies — and the copy has to carry
+   * Nothing satisfies both, so the build copies, and the copy has to carry
    * the suffix vpk insists on.
    */
   it("ends in .entitlements, which is the only thing vpk accepts", () => {

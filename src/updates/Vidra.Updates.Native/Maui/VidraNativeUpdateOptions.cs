@@ -9,13 +9,13 @@ namespace Vidra.Hosting;
 /// Settings arrive from three places, most specific first, exactly as the OTA
 /// tier's do: what <c>UseVidraNativeUpdates(...)</c> sets in code, the
 /// <c>VIDRA_NATIVE_UPDATE_*</c> environment variables, and the <c>native</c>
-/// block of <c>vidra-updates.json</c> — which <c>vidra build</c> writes from the
+/// block of <c>vidra-updates.json</c>, which <c>vidra build</c> writes from the
 /// app's own <c>package.json</c>, so the usual case needs no C# at all.
 /// </remarks>
 public sealed class VidraNativeUpdateOptions
 {
     /// <summary>
-    /// Base URL of the directory <c>vpk pack</c> writes into — the directory,
+    /// Base URL of the directory <c>vpk pack</c> writes into: the directory,
     /// not a file. The OTA tier's <c>feedUrl</c> names <c>bundles.json</c>; this
     /// one names the prefix that holds <c>releases.{channel}.json</c>. They can
     /// be the same prefix: the two indexes never collide.
@@ -24,7 +24,7 @@ public sealed class VidraNativeUpdateOptions
 
     /// <summary>
     /// Velopack's channel, not Vidra's. Left unset it means Velopack's own
-    /// default for the platform — <c>win</c> / <c>osx</c>, the names
+    /// default for the platform: <c>win</c> / <c>osx</c>, the names
     /// <c>vpk pack</c> writes.
     /// </summary>
     public string? Channel { get; set; }

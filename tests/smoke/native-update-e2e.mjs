@@ -5,9 +5,9 @@
 //
 // Three launches, because the claim under test is a claim about a sequence:
 //
-//   1. report  — the app knows it is installed, at 1.0.0
-//   2. update  — the feed offers 1.0.1, it downloads, and staging succeeds
-//   3. report  — the binary on disk is now 1.0.1, and its payload file changed
+//   1. report   the app knows it is installed, at 1.0.0
+//   2. update   the feed offers 1.0.1, it downloads, and staging succeeds
+//   3. report   the binary on disk is now 1.0.1, and its payload file changed
 //
 // The payload file is the load-bearing part: version numbers are bookkeeping
 // that both sides could agree on while nothing was replaced. A file whose
@@ -40,7 +40,7 @@ let failures = 0;
 
 try {
   // The reporting launches keep the background check switched off. It is not
-  // that the check is unwelcome — it is that this test is about a sequence, and
+  // that the check is unwelcome. It is that this test is about a sequence, and
   // a launch that quietly staged 1.0.1 while reporting on 1.0.0 would make the
   // next step's result depend on how fast the runner's network was.
   const first = await launch("1-report-before", { VIDRA_NATIVE_MODE: "report", VIDRA_NATIVE_UPDATE_ENABLED: "0" });
@@ -68,7 +68,7 @@ try {
     "the updater replaced the app on disk");
 
   // The payload file appearing means the swap *started*, not that the updater
-  // is done — it still has shortcuts, the old package and its own exit to get
+  // is done. It still has shortcuts, the old package and its own exit to get
   // through. Launching into that window starts an app whose directory is being
   // rewritten underneath it, and produces no output at all.
   await waitForUpdaterToExit(120_000);
@@ -92,7 +92,7 @@ if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`);
   process.exit(1);
 }
-console.log("\nPASS — a Vidra app applied a 1.0.0 -> 1.0.1 native update and the bytes moved");
+console.log("\nPASS - a Vidra app applied a 1.0.0 -> 1.0.1 native update and the bytes moved");
 
 // ---------------------------------------------------------------------------
 
@@ -126,7 +126,7 @@ function expect(condition, what, actual) {
   console.error(`  FAIL ${what} (got ${JSON.stringify(actual)})`);
 }
 
-/** Static file server over the release directory — this is a Velopack feed. */
+/** Static file server over the release directory, which is what a Velopack feed is. */
 function serve(root, port) {
   return new Promise((resolve, reject) => {
     const s = http.createServer((req, res) => {
@@ -152,7 +152,7 @@ function serve(root, port) {
  *
  * Inside a packed `.app`, `Contents/MacOS` holds three things: the app's own
  * binary, Velopack's `UpdateMac`, and a `sq.version`. Taking the first
- * directory entry launches whichever the filesystem lists first — once that
+ * directory entry launches whichever the filesystem lists first, once that
  * was `UpdateMac`, which starts, finds no `--veloapp-*` subcommand, exits, and
  * looks exactly like an app that failed to boot.
  */
@@ -204,7 +204,7 @@ async function waitForUpdaterToExit(timeoutMs) {
 
 /**
  * On Windows the path passed as `--exe` is Velopack's shim at the install root;
- * the app that actually runs — and the one an update replaces — lives in
+ * the app that actually runs (and the one an update replaces) lives in
  * `current/`. Reading the payload next to the shim reports the first install's
  * file forever and makes a successful update look like a timeout.
  */
@@ -289,14 +289,14 @@ async function launch(label, env) {
  * The last 60 lines, plus anything that looks like a cause.
  *
  * A mono crash dump is ~55 lines of native stack, so a plain tail pushes the
- * one line explaining the abort off the top — which is exactly what happened
+ * one line explaining the abort off the top, which is exactly what happened
  * the first time a Catalyst app failed to boot here.
  */
 /**
  * macOS only. A Catalyst app that dies inside the mono runtime prints a native
  * stack and nothing about why: mono's fatal message goes to os_log. Reading it
  * back is the difference between "it crashed" and "Failed to load AOT module
- * 'X' … because a dependency … is out of date", which is what turned a
+ * 'X' because a dependency is out of date", which is what turned a
  * two-day dead end into a one-line fix.
  */
 function unifiedLog(bin) {

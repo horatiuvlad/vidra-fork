@@ -10,14 +10,14 @@ namespace Vidra.Updates.Native.Tests;
 /// <remarks>
 /// <para>
 /// The standing objection to owning a locator is that it encodes an install
-/// layout Velopack can change without calling it breaking — where
+/// layout Velopack can change without calling it breaking, such as where
 /// <c>packages/</c> lives, which <c>sq.version</c> wins, what counts as
 /// portable. This is the answer to that objection, and it is a test rather than
 /// a promise: the day they move something, it fails on us before it fails on a
 /// user.
 /// </para>
 /// <para>
-/// macOS only, and not because of a policy — <see cref="OsxVelopackLocator"/>
+/// macOS only, and not because of a policy. <see cref="OsxVelopackLocator"/>
 /// refuses to be constructed on a non-osx system, which is the whole reason
 /// <see cref="VidraCatalystLocator"/> exists. Comparing against it therefore
 /// has to happen on a real Mac, which the macOS CI leg is.
@@ -32,7 +32,7 @@ public sealed class LocatorConformanceTests
 {
     /// <summary>
     /// Compared by value. <c>Log</c> and <c>Process</c> are excluded: they are
-    /// object identities, not answers about the install — and the logger is the
+    /// object identities, not answers about the install, and the logger is the
     /// one thing Vidra's locator deliberately implements differently, because
     /// Velopack's combined logger is internal.
     /// </summary>
@@ -68,7 +68,7 @@ public sealed class LocatorConformanceTests
     }
 
     /// <summary>
-    /// A bundle that was built but never packed — no <c>UpdateMac</c>. Velopack
+    /// A bundle that was built but never packed, so there is no <c>UpdateMac</c>. Velopack
     /// treats it as not installed; so must we.
     /// </summary>
     [MacOsFact]
@@ -94,7 +94,7 @@ public sealed class LocatorConformanceTests
             compared++;
             Read(property, ours).Should().Be(
                 Read(property, oracle),
-                "VidraCatalystLocator.{0} must match OsxVelopackLocator.{0} — Velopack's install layout is the contract",
+                "VidraCatalystLocator.{0} must match OsxVelopackLocator.{0}: Velopack's install layout is the contract",
                 property.Name);
         }
 
@@ -116,7 +116,7 @@ public sealed class LocatorConformanceTests
         catch (TargetInvocationException ex)
         {
             // A property that throws is still an answer, and both had better
-            // throw the same one — `ThisExeRelativePath` does exactly this when
+            // throw the same one. `ThisExeRelativePath` does exactly this when
             // the process is not under the app content directory.
             return $"threw {ex.InnerException?.GetType().Name}";
         }
@@ -133,7 +133,7 @@ internal sealed class MacOsFactAttribute : FactAttribute
     {
         if (!OperatingSystem.IsMacOS())
         {
-            Skip = "OsxVelopackLocator refuses to construct off macOS — which is the reason VidraCatalystLocator exists.";
+            Skip = "OsxVelopackLocator refuses to construct off macOS, which is the reason VidraCatalystLocator exists.";
         }
     }
 }

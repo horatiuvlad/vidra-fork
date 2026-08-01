@@ -112,7 +112,7 @@ describe("scaffoldDir", () => {
 /**
  * MSBuild parses the template's project files as XML, and an XML comment cannot
  * contain `--`. Velopack's hook arguments are spelled `--veloapp-*`, so a
- * comment explaining them broke every scaffolded Windows build with MSB4025 —
+ * comment explaining them broke every scaffolded Windows build with MSB4025,
  * five minutes into a CI job, in a file nobody had touched.
  */
 describe("template XML comments", () => {

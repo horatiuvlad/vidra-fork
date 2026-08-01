@@ -12,7 +12,7 @@ public static class MauiProgram
         // Updates come in two tiers. Both are opt-in and both read one
         // `vidra.updates` block in package.json.
         //
-        // Web bundle — fast, no reinstall. Add `.UseVidraUpdates()` below and
+        // Web bundle: fast, no reinstall. Add `.UseVidraUpdates()` below and
         //
         //   "vidra": { "updates": { "feedUrl": "https://example.com/bundles.json" } }
         //
@@ -20,7 +20,7 @@ public static class MauiProgram
         // contract fingerprints match this build, so JS can never call a bridge
         // the installed binary lacks.
         //
-        // Whole app — native code included. Reference Vidra.Updates.Native, add
+        // Whole app: native code included. Reference Vidra.Updates.Native, add
         // `.UseVidraNativeUpdates()`, uncomment the line in Platforms/*/Program.cs,
         // and add
         //

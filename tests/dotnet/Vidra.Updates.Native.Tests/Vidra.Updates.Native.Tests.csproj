@@ -25,7 +25,7 @@
   </ItemGroup>
 
   <!--
-    References the `net10.0` TFM of the package — the half that carries the
+    References the `net10.0` TFM of the package, the half that carries the
     locator and the config resolution. That is the entire reason the package
     multi-targets rather than being MAUI-only: this project runs on the Linux
     leg in milliseconds, and the conformance test in it runs on the macOS leg

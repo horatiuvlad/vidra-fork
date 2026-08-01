@@ -20,7 +20,7 @@ import { resolveWindowsSigningConfig, timestampUrl } from "./windows-signing.js"
  *
  * Vidra owns none of Velopack: `vpk` is a build-time tool the CLI shells out
  * to, and the app talks to `UpdateManager` directly. What lives here is the
- * plumbing that makes `vpk` part of a build — resolving what to pack, merging
+ * plumbing that makes `vpk` part of a build: resolving what to pack, merging
  * from the live feed first, and handing the tool the identity `vidra build`
  * already resolved.
  */
@@ -63,7 +63,7 @@ export const resolveNativeUpdateSettings = (opts: {
 
   if (config.enabled === false) {
     throw new NativeUpdateConfigError(
-      'vidra.updates.native.enabled is false — remove --native-update, or set it to true',
+      'vidra.updates.native.enabled is false: remove --native-update, or set it to true',
     );
   }
 
@@ -78,7 +78,7 @@ export const resolveNativeUpdateSettings = (opts: {
   if (!config.feedUrl) {
     // Not fatal on its own: a build can produce a release the developer uploads
     // by hand. But the *app* cannot check a feed it was never told about, so a
-    // build that packs without one produces an installer that never updates —
+    // build that packs without one produces an installer that never updates,
     // which is exactly the silent half-configured state `vidra doctor` exists
     // to catch.
     return { packId, packTitle, packVersion: opts.version, feedUrl: null, channel: config.channel ?? null };
@@ -97,7 +97,7 @@ export const resolveNativeUpdateSettings = (opts: {
 export const readApplicationId = (csprojPath: string): string | null =>
   readCsprojProperty(csprojPath, "ApplicationId");
 
-/** `<ApplicationTitle>` out of the host csproj — the app's display name. */
+/** `<ApplicationTitle>` out of the host csproj: the app's display name. */
 export const readApplicationTitle = (csprojPath: string): string | null =>
   readCsprojProperty(csprojPath, "ApplicationTitle");
 
@@ -111,7 +111,7 @@ const readCsprojProperty = (csprojPath: string, name: string): string | null => 
  * `--signParams` for `vpk pack` on Windows, mirroring what `vidra build` passes
  * to `signtool` directly.
  *
- * Velopack signs everything it packages with an embedded `signtool` — 63 files
+ * Velopack signs everything it packages with an embedded `signtool`: 63 files
  * on the probe, including its own `Setup.exe` and `Update.exe`, which are the
  * binaries SmartScreen actually judges. `vidra build` signs one file, so this
  * is a strict improvement wherever a certificate exists.
@@ -204,7 +204,7 @@ export const runNativeUpdate = (opts: {
           // Velopack has to own signing: it adds files to a sealed bundle
           // *after* the build signed it, which breaks the seal. Handing it the
           // same identity and entitlements puts the packed bundle back on the
-          // baseline's row — Developer ID authority, hardened runtime, all
+          // baseline's row: Developer ID authority, hardened runtime, all
           // three JIT entitlements, strict and deep verification passing.
           signAppIdentity: resolveMacCodeSigningIdentity("distribution"),
           signEntitlements: opts.entitlements
@@ -220,7 +220,7 @@ export const runNativeUpdate = (opts: {
   if (!result.ok) {
     if (result.alreadyReleased) {
       throw new NativeUpdateError(
-        `${opts.settings.packVersion} is already in the feed — nothing was written`,
+        `${opts.settings.packVersion} is already in the feed, nothing was written`,
         "bump the version in package.json (npm version patch), or drop --native-update to rebuild the installer only",
       );
     }
@@ -231,7 +231,7 @@ export const runNativeUpdate = (opts: {
 };
 
 /**
- * A feed that is not there yet is the normal first release, not an error — but
+ * A feed that is not there yet is the normal first release, not an error: but
  * a feed that exists and could not be read is a real risk of publishing an
  * index that drops every previous entry, so it stops the build.
  */

@@ -89,7 +89,7 @@ fi
 
 # Vidra's own `codesign` calls find the identity through the keychain search
 # list this script already extended, so they need no keychain argument. `vpk`
-# takes an explicit `--keychain` — and it wants a *path*: given the bare name it
+# takes an explicit `--keychain`, and it wants a *path*: given the bare name it
 # answers "--keychain file is not found, but must exist".
 KEYCHAIN_PATH="$(security list-keychains -d user | tr -d ' "' | grep -F "$KEYCHAIN" | head -1)"
 KEYCHAIN_PATH="${KEYCHAIN_PATH:-$HOME/Library/Keychains/$KEYCHAIN}"
