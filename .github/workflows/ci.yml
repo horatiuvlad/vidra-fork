@@ -653,6 +653,33 @@ jobs:
           path: ${{ runner.temp }}/ota-work/*.json
           if-no-files-found: ignore
 
+      # The control for the bisect further down: this is the app *before* it
+      # references Velopack, copied out of its build tree and run. If it stays
+      # up and the post-Velopack build does not, the package reference is the
+      # difference rather than anything packing did.
+      - name: A pre-Velopack build survives being copied (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          set +e
+          built="$(find src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst -maxdepth 1 -name '*.app' -type d -print -quit)"
+          dest="${{ runner.temp }}/prenative.app"
+          rm -rf "$dest"; ditto "$built" "$dest"
+          exe="$dest/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$dest/Contents/Info.plist")"
+          "$exe" > "${{ runner.temp }}/prenative.log" 2>&1 &
+          pid=$!
+          sleep 25
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "RUNS — the copied pre-Velopack app is still alive after 25s"
+            kill -9 "$pid"
+          else
+            echo "DIED — the copied pre-Velopack app exited on its own:"
+            sed -n '1,25p' "${{ runner.temp }}/prenative.log"
+          fi
+          exit 0
+
       # ---- Native (whole-app) updates ----
       #
       # The same scaffold again, this time shipping Velopack: two releases built

@@ -77,6 +77,15 @@ copy() {
 }
 
 echo
+echo "======== Z: the built bundle, launched where it was built"
+echo "-- MonoBundle inventory"
+ls "$BUILT/Contents/MonoBundle" | wc -l | sed 's/^/      entries: /'
+ls "$BUILT/Contents/MonoBundle" | grep -icE 'velopack|vidra' | sed 's/^/      velopack+vidra entries: /'
+ls "$BUILT/Contents/MonoBundle" | grep -iE 'velopack|vidra' | sed 's/^/      /'
+echo "      .dll: $(ls "$BUILT/Contents/MonoBundle" | grep -c '\.dll$')  .dylib: $(ls "$BUILT/Contents/MonoBundle" | grep -c '\.dylib$')  .aotdata: $(ls "$BUILT/Contents/MonoBundle" | grep -c 'aotdata')"
+launch Z-in-place "$BUILT"
+
+echo
 echo "======== A: control (a plain copy)"
 launch A-control "$(copy A)"
 
