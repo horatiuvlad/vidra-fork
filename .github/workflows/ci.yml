@@ -306,21 +306,6 @@ jobs:
           VIDRA_SMOKE_CONFIG: Release
         run: node tests/smoke/echo-ping.mjs
 
-      # ---- Locator conformance (macOS only, no MAUI workload needed) ----
-      #
-      # Vidra ships its own IVelopackLocator because Velopack's client does not
-      # enumerate Mac Catalyst. The objection to owning one is that it encodes
-      # an install layout Velopack can change without calling it breaking, so
-      # this asserts ours answers exactly what `OsxVelopackLocator` answers over
-      # the same fixture bundle. It has to run here rather than on Linux for the
-      # same reason the locator exists: theirs refuses to construct off macOS.
-      - name: Locator conformance against Velopack's own (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          dotnet test tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj \
-            -c Release --logger "trx;LogFileName=updates-native-macos.trx"
-
       # ---- Template build smoke (requires MAUI workload) ----
       #
       # The manifest is deliberately NOT pinned. `--skip-manifest-update` used to
@@ -339,6 +324,26 @@ jobs:
       - name: Log installed workloads
         shell: bash
         run: dotnet workload list
+
+      # ---- Locator conformance (macOS only) ----
+      #
+      # Vidra ships its own IVelopackLocator because Velopack's client does not
+      # enumerate Mac Catalyst. The objection to owning one is that it encodes
+      # an install layout Velopack can change without calling it breaking, so
+      # this asserts ours answers exactly what `OsxVelopackLocator` answers over
+      # the same fixture bundle. It has to run here rather than on Linux for the
+      # same reason the locator exists: theirs refuses to construct off macOS.
+      #
+      # After the workload install, not before it: the test project references
+      # the `net10.0` half of a package that also targets `net10.0-maccatalyst`,
+      # and restoring it needs the Catalyst workload even though nothing here
+      # builds that half.
+      - name: Locator conformance against Velopack's own (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dotnet test tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj \
+            -c Release --logger "trx;LogFileName=updates-native-macos.trx"
 
       - name: Build SDK
         shell: bash
