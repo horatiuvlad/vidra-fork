@@ -108,3 +108,38 @@ describe("scaffoldDir", () => {
     }
   });
 });
+
+/**
+ * MSBuild parses the template's project files as XML, and an XML comment cannot
+ * contain `--`. Velopack's hook arguments are spelled `--veloapp-*`, so a
+ * comment explaining them broke every scaffolded Windows build with MSB4025 —
+ * five minutes into a CI job, in a file nobody had touched.
+ */
+describe("template XML comments", () => {
+  const templateRoot = path.join(__dirname, "..", "..", "templates");
+
+  const xmlFiles = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return entry.name === "node_modules" ? [] : xmlFiles(full);
+      return /\.(csproj|xaml|plist|config)$/i.test(entry.name) ? [full] : [];
+    });
+
+  const files = xmlFiles(templateRoot);
+
+  it("finds files to check", () => {
+    expect(files.length).toBeGreaterThan(0);
+  });
+
+  it.each(files.map((f) => [path.relative(templateRoot, f), f]))(
+    "%s has no double hyphen inside a comment",
+    (_name, file) => {
+      const source = fs.readFileSync(file, "utf-8");
+      const offenders = [...source.matchAll(/<!--([\s\S]*?)-->/g)]
+        .filter((match) => match[1].includes("--"))
+        .map((match) => match[1].trim().slice(0, 60));
+
+      expect(offenders).toEqual([]);
+    },
+  );
+});

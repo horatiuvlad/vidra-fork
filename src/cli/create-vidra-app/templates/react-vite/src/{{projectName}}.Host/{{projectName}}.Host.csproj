@@ -57,9 +57,9 @@
       This app owns its Windows entry point (Platforms/Windows/Program.cs)
       instead of the one the XAML compiler generates.
 
-      A native updater has to run before any UI framework starts: Velopack
-      re-launches the app with `--veloapp-*` arguments on install, update and
-      uninstall and expects it to do that work and exit without ever showing a
+      A native updater has to run before any UI framework starts: on install,
+      update and uninstall Velopack re-launches the app with a `veloapp`
+      argument and expects it to do that work and exit without ever showing a
       window, and `vpk pack` inspects the assembly and warns when it finds the
       call outside the entry point. Entry-point shape is the one thing a package
       reference cannot retrofit, so every Vidra app ships with it and the
