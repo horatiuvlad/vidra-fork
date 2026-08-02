@@ -32,6 +32,12 @@ export interface VpkPackOptions {
   /** File name, not path, of the executable that *is* the app. */
   mainExe: string;
   outputDir: string;
+  /**
+   * Display name. On macOS this is not cosmetic: `vpk pack` **renames the
+   * bundle** to `<packTitle ?? packId>.app`, so leaving it out ships an app
+   * called `com.example.notes.app`.
+   */
+  packTitle?: string | null;
   /** Velopack's channel. Left out it defaults to `osx` / `win`. */
   channel?: string | null;
   /** macOS: a `Developer ID Application:` identity. */
@@ -81,6 +87,7 @@ export const packArgs = (options: VpkPackOptions): string[] => {
     options.outputDir,
   ];
 
+  if (options.packTitle) args.push("--packTitle", options.packTitle);
   if (options.channel) args.push("--channel", options.channel);
   if (options.signAppIdentity) args.push("--signAppIdentity", options.signAppIdentity);
   if (options.signEntitlements) args.push("--signEntitlements", options.signEntitlements);

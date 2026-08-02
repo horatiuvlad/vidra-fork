@@ -27,7 +27,8 @@ describe("resolveNativeUpdateSettings", () => {
     csproj = path.join(work, "Notes.Host.csproj");
     nodeFs.writeFileSync(
       csproj,
-      "<Project><PropertyGroup><ApplicationId>com.example.notes</ApplicationId></PropertyGroup></Project>",
+      "<Project><PropertyGroup><ApplicationId>com.example.notes</ApplicationId>" +
+        "<ApplicationTitle>Notes</ApplicationTitle></PropertyGroup></Project>",
     );
   });
 
@@ -54,6 +55,20 @@ describe("resolveNativeUpdateSettings", () => {
   it("falls back to the project name when the csproj has no ApplicationId", () => {
     nodeFs.writeFileSync(csproj, "<Project />");
     expect(resolve({ feedUrl: "https://cdn/" }).packId).toBe("Notes");
+  });
+
+  /**
+   * Not cosmetic. `vpk pack` renames the bundle to `<packTitle ?? packId>.app`,
+   * so leaving the title out ships an app called `com.example.notes.app` — and
+   * that is the name a user sees in /Applications forever after.
+   */
+  it("takes the pack title from <ApplicationTitle>", () => {
+    expect(resolve({ feedUrl: "https://cdn/" }).packTitle).toBe("Notes");
+  });
+
+  it("falls back to the project name for the title too", () => {
+    nodeFs.writeFileSync(csproj, "<Project />");
+    expect(resolve({ feedUrl: "https://cdn/" }).packTitle).toBe("Notes");
   });
 
   it("packs the version the app already carries", () => {
