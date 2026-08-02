@@ -17,8 +17,8 @@
 // app directory, so a handle captured once would point at a directory that no
 // longer exists.
 //
-// Adapted from the throwaway `probe/velopack` rig, which proved the same
-// sequence against raw Velopack. What is under test here is Vidra's glue.
+// Adapted from a throwaway probe rig, which proved the same sequence against
+// raw Velopack. What is under test here is Vidra's glue.
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";

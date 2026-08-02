@@ -657,17 +657,23 @@ jobs:
       #
       # The same scaffold again, this time shipping Velopack: two releases built
       # by `vidra build --native-update`, the first one installed, and the second
-      # applied to it in place. Folded in from the throwaway `probe/velopack`
-      # rig, which proved the sequence against raw Velopack. What is under test
+      # applied to it in place. Folded in from a throwaway probe rig, which
+      # proved the sequence against raw Velopack. What is under test
       # here is Vidra's own glue: the entry points, the builder call, the config
       # resolution, and (on macOS) the Catalyst locator Velopack does not ship.
       #
-      # macOS is the leg that can still fail. No Catalyst app had completed a
-      # Velopack round-trip when this was written.
+      # macOS is the leg that had never been proven: this is the first Catalyst
+      # app to complete a Velopack round-trip, and it is why the leg exists.
       - name: Install vpk
         shell: bash
         run: |
-          dotnet tool install -g vpk || dotnet tool update -g vpk
+          # Pinned to match the Velopack PackageReference. Every behaviour the
+          # CLI encodes -- the "already in the feed" refusal, the version
+          # banner it scrapes, --keychain wanting a path -- was measured
+          # against 1.2.0, so a vpk bump should be a deliberate PR rather
+          # than something a restore does to a green run.
+          dotnet tool install -g vpk --version 1.2.0 \
+            || dotnet tool update -g vpk --version 1.2.0
           if [ "$RUNNER_OS" = "Windows" ]; then
             echo "$USERPROFILE\\.dotnet\\tools" >> "$GITHUB_PATH"
           else
@@ -786,12 +792,15 @@ jobs:
         if: always() && runner.os == 'macOS'
         shell: bash
         run: |
+          # The step is `always()`, so an earlier failure leaves NATIVE_EXE
+          # unset and there is nothing to check. The job is already red then.
           [ -n "${NATIVE_EXE:-}" ] || exit 0
-          # Deliberately reported, not asserted. An updater-replaced bundle
-          # keeping a valid signature is the claim; whether Gatekeeper accepts
-          # it needs a notarized build, which no CI here can produce.
+          # The signature is asserted, because an updater-replaced bundle
+          # keeping a valid one is the claim. Whether Gatekeeper accepts it
+          # is not, and cannot be: that needs a notarized build, which no CI
+          # here can produce.
           codesign -dv --verbose=4 "$NATIVE_EXE" 2>&1 | sed -n '1,12p' || true
-          codesign --verify --strict "$NATIVE_EXE" 2>&1 || true
+          codesign --verify --strict "$NATIVE_EXE"
 
       - name: Upload native-update proofs
         if: always()
