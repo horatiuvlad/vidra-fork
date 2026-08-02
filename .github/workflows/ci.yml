@@ -204,7 +204,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotnet-trx
           path: "**/TestResults/*.trx"
@@ -647,7 +647,7 @@ jobs:
 
       - name: Upload OTA proofs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ota-proofs-${{ matrix.os }}
           path: ${{ runner.temp }}/ota-work/*.json
@@ -804,7 +804,7 @@ jobs:
 
       - name: Upload native-update proofs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-update-proofs-${{ matrix.os }}
           path: |
@@ -819,7 +819,7 @@ jobs:
       # would bury an earlier real failure under a second, confusing one.
       - name: Upload packaged installer
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vidra-installer-${{ matrix.os }}
           path: ${{ runner.temp }}/vidra-smoke/dist/*
