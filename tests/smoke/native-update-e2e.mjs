@@ -273,6 +273,7 @@ async function launch(label, env) {
     failures++;
     console.error(`  FAIL ${label} produced no proof within ${launchTimeoutMs}ms`);
     console.error(tail(log));
+    console.error(unifiedLog(bin));
     return {};
   }
 
@@ -284,7 +285,38 @@ async function launch(label, env) {
   return parsed;
 }
 
+/**
+ * The last 60 lines, plus anything that looks like a cause.
+ *
+ * A mono crash dump is ~55 lines of native stack, so a plain tail pushes the
+ * one line explaining the abort off the top — which is exactly what happened
+ * the first time a Catalyst app failed to boot here.
+ */
+/**
+ * macOS only. A Catalyst app that dies inside the mono runtime prints a native
+ * stack and nothing about why: mono's fatal message goes to os_log. Reading it
+ * back is the difference between "it crashed" and "Failed to load AOT module
+ * 'X' … because a dependency … is out of date", which is what turned a
+ * two-day dead end into a one-line fix.
+ */
+function unifiedLog(bin) {
+  if (process.platform !== "darwin") return "";
+  const name = path.basename(bin);
+  const shown = spawnSync(
+    "log",
+    ["show", "--last", "3m", "--style", "compact", "--predicate", `process == "${name}"`],
+    { encoding: "utf8" },
+  );
+  const lines = (shown.stdout ?? "").split(/\r?\n/).filter((l) => /\berror\b|\bfault\b/i.test(l));
+  return lines.length ? ["---- os_log ----", ...lines.slice(-20)].join("\n") : "";
+}
+
 function tail(file) {
   if (!fs.existsSync(file)) return "(no output captured)";
-  return fs.readFileSync(file, "utf8").split(/\r?\n/).slice(-60).join("\n");
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+  const causes = lines.filter((l) =>
+    /error|fail|cannot|unable|not found|assert|exception|\* Assertion/i.test(l),
+  );
+  const head = causes.length ? ["---- lines that look like a cause ----", ...causes.slice(0, 30), ""] : [];
+  return [...head, "---- tail ----", ...lines.slice(-60)].join("\n");
 }
