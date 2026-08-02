@@ -38,7 +38,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
 
       # A bump on top of an already-inconsistent tree would bury the drift in a
       # release commit, so refuse before touching anything.
