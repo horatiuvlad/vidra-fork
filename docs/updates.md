@@ -1,10 +1,18 @@
-# Over-the-air updates
+# Updates
 
-Vidra can ship a new **web bundle** — your `ui/` build — to installed apps without
-reinstalling anything. Native code is not updated this way; that still travels
-through a normal release.
+Vidra apps update in two tiers. Use either, both, or neither.
 
-Updates are **off** until you ask for them.
+| | ships | mechanism | needs |
+|---|---|---|---|
+| **Over-the-air** | your `ui/` build | a new bundle, applied on the next launch | nothing extra |
+| **[Native](#native-whole-app-updates)** | the whole app, native code included | Velopack replaces the install in place | `Vidra.Updates.Native` + `vpk` |
+
+Most of this document is about the first. It is the one you reach for weekly: a
+bundle is small, needs no installer, and can never get ahead of the binary,
+it installs only when its contract fingerprints match the running host. The
+second is for the releases that change C#.
+
+Both are **off** until you ask for them, and both read one `vidra.updates` block.
 
 ## Turning them on
 
@@ -267,6 +275,109 @@ cd dist && python3 -m http.server 8099
 `VIDRA_UPDATE_FEED_URL` overrides the stamped feed at runtime, which is the
 easiest way to point a build at staging without rebuilding it.
 
+## Native (whole-app) updates
+
+For the releases that change C#. Vidra drives [Velopack](https://velopack.io),
+`vidra build` shells out to `vpk`, and the app talks to Velopack's client
+directly. Vidra owns neither; what it adds is the plumbing, and a locator that
+teaches Velopack what Mac Catalyst is.
+
+Four steps, and `npx vidra doctor` names whichever one is missing.
+
+**1. Install the tool** (once per machine):
+
+```bash
+dotnet tool install -g vpk
+```
+
+**2. Reference the package** in your host `.csproj`:
+
+```xml
+<PackageReference Include="Vidra.Updates.Native" Version="0.4.0" />
+```
+
+**3. Uncomment the two lines** the template already shipped in
+`Platforms/MacCatalyst/Program.cs` and `Platforms/Windows/Program.cs`, and add
+the builder call:
+
+```csharp
+// Platforms/*/Program.cs: before anything else runs
+VelopackApp.Build().UseVidraLocator().Run();
+```
+
+```csharp
+builder.UseVidra().UseVidraNativeUpdates();
+```
+
+That call has to be literally in `Main`: on install, update and uninstall
+Velopack re-launches the app with a `--veloapp-*` argument and expects it to do
+that work and exit without showing a window, and `vpk pack` inspects the
+assembly and warns when it finds the call anywhere else. Every scaffolded app
+already has the entry points, because entry-point shape is the one thing a
+package reference cannot retrofit.
+
+**4. Point it at a feed:**
+
+```json
+{
+  "vidra": {
+    "updates": {
+      "feedUrl": "https://updates.example.com/bundles.json",
+      "native": { "feedUrl": "https://updates.example.com/app/" }
+    }
+  }
+}
+```
+
+The two `feedUrl`s differ in kind: the OTA one names a *file*, the native one
+names the *directory* `vpk` writes into. They can be the same prefix,
+`releases.{channel}.json` and `bundles.json` never collide.
+
+Then release:
+
+```bash
+npm version patch
+npx vidra build --target windows --native-update
+npx vidra build --target macos   --native-update   # on a Mac
+```
+
+Each build downloads the live feed into `dist/release/` first and packs into it,
+which is what produces deltas and what keeps older entries alive. Upload the
+whole of `dist/release/`, payloads first and the index last. `vidra bundle --out
+dist/release` puts both tiers under one prefix.
+
+What comes out, beside the usual artifact:
+
+| file | what it is |
+|---|---|
+| `dist/<App>-<version>-Setup.exe` | the Windows installer, and the recommended download |
+| `dist/<App>-<version>-windows.zip` | Velopack's portable archive, under the name the ZIP target always used |
+| `dist/<App>-<version>-macos.dmg` | the DMG, now wrapping the *packed* `.app` |
+| `dist/release/` | the feed: packages, deltas, `releases.{channel}.json` |
+
+### Things worth knowing before you ship one
+
+- **`vpk` refuses to re-publish a version.** Packing a version equal to or lower
+  than the newest in the feed fails and writes nothing. No overwrite, no second
+  package under one number. Bump the version.
+- **Every release keeps a full package in the feed**, not just a delta: older
+  installs delta against them, so they cannot be pruned blindly.
+- **Velopack signs everything it packages**, including its own `Setup.exe` and
+  `Update.exe`, given a certificate, which are the binaries SmartScreen actually judges.
+  It uses the same identity `vidra build` resolved.
+- **On macOS `vpk` re-signs with `--deep`**, which Vidra's own signing avoids.
+  The result verifies strictly, and whether it *notarizes* has never been
+  tested: that needs a paid Apple Developer membership, and no CI here has one.
+- **Mac Catalyst is not a platform Velopack advertises.** Its client picks a
+  locator from `RuntimeInformation.IsOSPlatform`, which answers false for OSX on
+  Catalyst. `UseVidraLocator()` supplies the missing one; without it,
+  `VelopackApp.Run()` throws before any update logic executes.
+- **The two tiers do not coordinate, and do not need to.** Both check in the
+  background, both apply on the next launch, and the native one wins the launch
+  it lands on. A native update cannot destroy OTA state: because app data lives outside
+  the directory Velopack replaces, and a bundle chosen against the old contract
+  is dropped at startup when the fingerprints stop matching.
+
 ## Reference
 
 | Variable | Effect |
@@ -275,6 +386,10 @@ easiest way to point a build at staging without rebuilding it.
 | `VIDRA_UPDATE_CHANNEL` | Overrides the channel |
 | `VIDRA_ASSET_ROOT` | Serves the WebView from a directory, bypassing updates entirely |
 | `VIDRA_UPDATE_SIGNING_KEY` | The signing key PEM, for `vidra bundle` in CI |
+| `VIDRA_NATIVE_UPDATE_FEED_URL` | Overrides the native feed directory |
+| `VIDRA_NATIVE_UPDATE_CHANNEL` | Overrides the native channel (default: `win` / `osx`) |
+| `VIDRA_NATIVE_UPDATE_ENABLED` | `0` turns native updates off for one run |
+| `VIDRA_MACOS_KEYCHAIN` | A non-default keychain for `vpk` to sign from |
 
 `vidra dev` never checks for updates — it serves the Vite dev server.
 

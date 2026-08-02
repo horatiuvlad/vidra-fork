@@ -9,6 +9,7 @@ import {
   workloadSetVersion,
   macCatalystPackIsStale,
   newestPackVersion,
+  diagnoseUpdateConfiguration,
 } from "../doctor.js";
 
 describe("hasNet10Sdk", () => {
@@ -198,5 +199,122 @@ describe("newestPackVersion", () => {
     expect(newestPackVersion(["not-a-version", "26.4.10259"])).toBe("26.4.10259");
     expect(newestPackVersion([])).toBeUndefined();
     expect(newestPackVersion(["nonsense"])).toBeUndefined();
+  });
+});
+
+/**
+ * Every state below produces an app that builds cleanly and never updates. The
+ * updater is silent by design when nothing is configured: an updater that
+ * announces "no feed" on every launch of every app trains people to ignore the
+ * line that matters, so this is the only place a typo can surface.
+ */
+describe("diagnoseUpdateConfiguration", () => {
+  const clean = {
+    config: null,
+    mauiProgram: "builder.UseMauiApp<App>().UseVidra();",
+    publishedUnsigned: false,
+  };
+
+  const names = (input: Parameters<typeof diagnoseUpdateConfiguration>[0]): string[] =>
+    diagnoseUpdateConfiguration(input).map((r) => r.name);
+
+  it("says nothing about an app that never asked for updates", () => {
+    expect(diagnoseUpdateConfiguration(clean)).toEqual([]);
+  });
+
+  it("says nothing when both halves are present", () => {
+    expect(
+      diagnoseUpdateConfiguration({
+        ...clean,
+        config: { feedUrl: "https://cdn/bundles.json" },
+        mauiProgram: ".UseVidra().UseVidraUpdates();",
+      }),
+    ).toEqual([]);
+  });
+
+  it("catches a feed configured with no builder call", () => {
+    expect(names({ ...clean, config: { feedUrl: "https://cdn/bundles.json" } })).toEqual([
+      "OTA updates wired up",
+    ]);
+  });
+
+  it("catches a builder call with no feed", () => {
+    expect(names({ ...clean, mauiProgram: ".UseVidra().UseVidraUpdates();" })).toEqual([
+      "OTA updates configured",
+    ]);
+  });
+
+  /**
+   * Configuring a public key makes signatures mandatory: the app will refuse
+   * an unsigned feed. Publishing one anyway produces an app that checks, finds
+   * an update, and silently refuses it forever.
+   */
+  it("catches a signed-only app publishing an unsigned feed", () => {
+    expect(
+      names({
+        ...clean,
+        config: { feedUrl: "https://cdn/bundles.json", publicKeys: ["k"] },
+        mauiProgram: ".UseVidra().UseVidraUpdates();",
+        publishedUnsigned: true,
+      }),
+    ).toEqual(["Feed signature"]);
+  });
+
+  it("does not complain about an unsigned feed when no key is configured", () => {
+    expect(
+      diagnoseUpdateConfiguration({
+        ...clean,
+        config: { feedUrl: "https://cdn/bundles.json" },
+        mauiProgram: ".UseVidra().UseVidraUpdates();",
+        publishedUnsigned: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("catches native updates configured with no builder call", () => {
+    expect(
+      names({
+        ...clean,
+        config: { feedUrl: "https://cdn/bundles.json", native: { feedUrl: "https://cdn/" } },
+        mauiProgram: ".UseVidra().UseVidraUpdates();",
+      }),
+    ).toEqual(["Native updates wired up"]);
+  });
+
+  it("catches a native block with no feed URL", () => {
+    expect(
+      names({
+        ...clean,
+        config: { native: { channel: "osx" } },
+        mauiProgram: ".UseVidra().UseVidraUpdates().UseVidraNativeUpdates();",
+      }),
+    ).toContain("Native feed");
+  });
+
+  /**
+   * A source file that could not be read is not evidence of a missing call.
+   * Reporting one would make `vidra doctor` fail on a project layout it simply
+   * does not understand.
+   */
+  /**
+   * The scaffolded MauiProgram explains how to turn updates on, and that
+   * explanation names the very call being looked for. A substring search
+   * reported every fresh app as already wired up.
+   */
+  it("does not mistake the template's own comment for a builder call", () => {
+    const template = [
+      "// Over-the-air updates are opt-in: add `.UseVidraUpdates()` below,",
+      "// and a `vidra.updates` block to package.json.",
+      "builder.UseMauiApp<App>().UseVidra();",
+    ].join("\n");
+
+    expect(names({ ...clean, config: { feedUrl: "https://cdn/bundles.json" }, mauiProgram: template }))
+      .toEqual(["OTA updates wired up"]);
+  });
+
+  it("does not accuse an app whose MauiProgram could not be read", () => {
+    expect(
+      names({ ...clean, config: { feedUrl: "https://cdn/bundles.json" }, mauiProgram: null }),
+    ).toEqual([]);
   });
 });

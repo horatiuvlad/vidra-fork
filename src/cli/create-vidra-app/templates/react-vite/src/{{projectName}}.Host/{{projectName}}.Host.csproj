@@ -54,6 +54,21 @@
     <WindowsPackageType Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">None</WindowsPackageType>
 
     <!--
+      This app owns its Windows entry point (Platforms/Windows/Program.cs)
+      instead of the one the XAML compiler generates.
+
+      A native updater has to run before any UI framework starts: on install,
+      update and uninstall Velopack re-launches the app with a `veloapp`
+      argument and expects it to do that work and exit without ever showing a
+      window, and `vpk pack` inspects the assembly and warns when it finds the
+      call outside the entry point. Entry-point shape is the one thing a package
+      reference cannot retrofit, so every Vidra app ships with it and the
+      Velopack line stays commented out until the app opts in. Mac Catalyst
+      already has a real `Main`, so it needs no equivalent switch.
+    -->
+    <DefineConstants Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+
+    <!--
       Skip the MacCatalyst managed linker in Debug. The linker's Setup step
       validates the MacCatalyst SDK headers against the maui workload version,
       and the maui workload tracks the newest Xcode aggressively (MT0180).

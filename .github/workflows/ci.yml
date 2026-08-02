@@ -85,6 +85,7 @@ jobs:
           dotnet restore tests/dotnet/Vidra.Modules.Windowing.Tests/Vidra.Modules.Windowing.Tests.csproj
           dotnet restore tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj
           dotnet restore tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj
+          dotnet restore tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj
 
       - name: Build C# test projects
         run: |
@@ -95,6 +96,7 @@ jobs:
           dotnet build tests/dotnet/Vidra.Modules.Windowing.Tests/Vidra.Modules.Windowing.Tests.csproj -c Release --no-restore
           dotnet build tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials.Tests.csproj -c Release --no-restore
           dotnet build tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj -c Release --no-restore
+          dotnet build tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj -c Release --no-restore
 
       - name: Run Vidra.Bridge.Tests
         run: dotnet test tests/dotnet/Vidra.Bridge.Tests/Vidra.Bridge.Tests.csproj -c Release --no-build --logger "trx;LogFileName=bridge.trx"
@@ -125,6 +127,14 @@ jobs:
       # app on the per-OS legs.
       - name: Run Vidra.Updates.Tests
         run: dotnet test tests/dotnet/Vidra.Updates.Tests/Vidra.Updates.Tests.csproj -c Release --no-build --logger "trx;LogFileName=updates.trx"
+
+      # The Mac Catalyst locator and the native config resolution are plain
+      # .NET: a locator is a function of a process path and the files under it
+      #, so both are decided here in milliseconds. The conformance test in the
+      # same project needs a real Mac and skips itself; it runs on the macOS
+      # leg, where Velopack's own locator can be constructed to compare against.
+      - name: Run Vidra.Updates.Native.Tests
+        run: dotnet test tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj -c Release --no-build --logger "trx;LogFileName=updates-native.trx"
 
       # ---- TypeScript SDK ----
       - name: Install SDK dependencies
@@ -237,7 +247,7 @@ jobs:
     # Caps a hung step. The self-signed certificate steps are the risk: adding a
     # cert to a trusted root store raises an interactive confirmation that a
     # headless runner can never answer.
-    timeout-minutes: 60
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
 
@@ -314,6 +324,26 @@ jobs:
       - name: Log installed workloads
         shell: bash
         run: dotnet workload list
+
+      # ---- Locator conformance (macOS only) ----
+      #
+      # Vidra ships its own IVelopackLocator because Velopack's client does not
+      # enumerate Mac Catalyst. The objection to owning one is that it encodes
+      # an install layout Velopack can change without calling it breaking, so
+      # this asserts ours answers exactly what `OsxVelopackLocator` answers over
+      # the same fixture bundle. It has to run here rather than on Linux for the
+      # same reason the locator exists: theirs refuses to construct off macOS.
+      #
+      # After the workload install, not before it: the test project references
+      # the `net10.0` half of a package that also targets `net10.0-maccatalyst`,
+      # and restoring it needs the Catalyst workload even though nothing here
+      # builds that half.
+      - name: Locator conformance against Velopack's own (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dotnet test tests/dotnet/Vidra.Updates.Native.Tests/Vidra.Updates.Native.Tests.csproj \
+            -c Release --logger "trx;LogFileName=updates-native-macos.trx"
 
       - name: Build SDK
         shell: bash
@@ -621,6 +651,165 @@ jobs:
         with:
           name: ota-proofs-${{ matrix.os }}
           path: ${{ runner.temp }}/ota-work/*.json
+          if-no-files-found: ignore
+
+      # ---- Native (whole-app) updates ----
+      #
+      # The same scaffold again, this time shipping Velopack: two releases built
+      # by `vidra build --native-update`, the first one installed, and the second
+      # applied to it in place. Folded in from a throwaway probe rig, which
+      # proved the sequence against raw Velopack. What is under test
+      # here is Vidra's own glue: the entry points, the builder call, the config
+      # resolution, and (on macOS) the Catalyst locator Velopack does not ship.
+      #
+      # macOS is the leg that had never been proven: this is the first Catalyst
+      # app to complete a Velopack round-trip, and it is why the leg exists.
+      - name: Install vpk
+        shell: bash
+        run: |
+          # Pinned to match the Velopack PackageReference. Every behaviour the
+          # CLI encodes -- the "already in the feed" refusal, the version
+          # banner it scrapes, --keychain wanting a path -- was measured
+          # against 1.2.0, so a vpk bump should be a deliberate PR rather
+          # than something a restore does to a green run.
+          dotnet tool install -g vpk --version 1.2.0 \
+            || dotnet tool update -g vpk --version 1.2.0
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "$USERPROFILE\\.dotnet\\tools" >> "$GITHUB_PATH"
+          else
+            echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+          fi
+
+      - name: Configure the scaffolded app for native updates (1.0.0)
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node "$GITHUB_WORKSPACE/tests/ci/native-update-setup.mjs" \
+            --project "$PWD" --name VidraSmoke --version 1.0.0 \
+            --main-page "$GITHUB_WORKSPACE/tests/smoke/native-update-main-page.cs.in"
+          # A new package reference changes the dependency graph, and Mac
+          # Catalyst's incremental build happily reuses AOT images compiled
+          # against the old one, producing an app that aborts at launch with
+          # "Failed to load AOT module ... because a dependency ... is out of date".
+          # This job is the only place a Vidra app ever acquires a reference
+          # mid-build; a developer adds one and builds, which is what this is.
+          rm -rf src/VidraSmoke.Host/bin src/VidraSmoke.Host/obj
+
+      # The feed is not serving during the build, so `vpk download` finds
+      # nothing and warns, which is exactly the first-release case.
+      - name: Build and pack 1.0.0
+        timeout-minutes: 25
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target ${{ matrix.target }} --native-update
+          ls -la dist dist/release
+
+      # `vpk pack` overwrites the un-versioned artifacts in its output directory
+      # on every release, so anything from 1.0.0 has to be taken before 1.0.1 is
+      # packed. `vidra build` already writes a versioned Setup.exe for exactly
+      # this reason; the portable archive still has to be captured by hand.
+      - name: Capture the 1.0.0 install
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          rm -rf "${{ runner.temp }}/native-install"
+          mkdir -p "${{ runner.temp }}/native-install"
+          zip="$(ls dist/release/*Portable.zip | head -1)"
+          echo "portable: $zip"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ditto -x -k "$zip" "${{ runner.temp }}/native-install"
+            app="$(find "${{ runner.temp }}/native-install" -maxdepth 2 -name '*.app' -type d -print -quit)"
+            [ -n "$app" ] || { echo "::error::no .app inside the portable archive"; exit 1; }
+            echo "NATIVE_EXE=$app" >> "$GITHUB_ENV"
+            echo "==> installed 1.0.0 at $app"
+          else
+            cp dist/VidraSmoke-1.0.0-Setup.exe "${{ runner.temp }}/Setup-1.0.0.exe"
+          fi
+
+      - name: Build and pack 1.0.1
+        timeout-minutes: 25
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          node "$GITHUB_WORKSPACE/tests/ci/native-update-setup.mjs" \
+            --project "$PWD" --name VidraSmoke --version 1.0.1
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target ${{ matrix.target }} --native-update
+          ls -la dist/release
+          cat dist/release/releases*.json
+
+      # The one question CI can answer about re-packing: `vpk pack` refuses a
+      # version already in the feed rather than overwriting it or emitting a
+      # second package under one version. Measured on Linux with vpk 1.2.0;
+      # asserted here on the platform that actually ships.
+      - name: Re-packing a published version is refused, not silently accepted
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          set +e
+          output="$(node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target ${{ matrix.target }} --native-update 2>&1)"
+          code=$?
+          set -e
+          echo "$output"
+          [ $code -ne 0 ] || { echo "::error::re-packing 1.0.1 should have failed"; exit 1; }
+          echo "$output" | grep -qi "already in the feed" || {
+            echo "::error::expected the 'already in the feed' message"; exit 1; }
+
+      - name: Install 1.0.0 with the generated Setup.exe (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $setup = "${{ runner.temp }}/Setup-1.0.0.exe"
+          Write-Host "running $setup --silent"
+          $p = Start-Process -FilePath $setup -ArgumentList "--silent" -PassThru -Wait
+          Write-Host "setup exit code: $($p.ExitCode)"
+          $root = Join-Path $env:LOCALAPPDATA "com.vidra.smoke"
+          if (-not (Test-Path $root)) {
+            Write-Host "::error::no install root at $root"
+            exit 1
+          }
+          Get-ChildItem -Recurse -Depth 2 $root | Select-Object -First 40 | Format-Table FullName
+          $exe = Get-ChildItem -Recurse $root -Filter "VidraSmoke.Host.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Host "::error::no VidraSmoke.Host.exe under $root"; exit 1 }
+          "NATIVE_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Apply a 1.0.0 -> 1.0.1 native update
+        timeout-minutes: 25
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi; }
+          node "$(native "$GITHUB_WORKSPACE/tests/smoke/native-update-e2e.mjs")" \
+            --exe "$(native "$NATIVE_EXE")" \
+            --feed "$(native "$PWD/dist/release")" \
+            --work "$(native "${{ runner.temp }}/native-work")"
+
+      - name: The updated app is still signed (macOS)
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          # The step is `always()`, so an earlier failure leaves NATIVE_EXE
+          # unset and there is nothing to check. The job is already red then.
+          [ -n "${NATIVE_EXE:-}" ] || exit 0
+          # The signature is asserted, because an updater-replaced bundle
+          # keeping a valid one is the claim. Whether Gatekeeper accepts it
+          # is not, and cannot be: that needs a notarized build, which no CI
+          # here can produce.
+          codesign -dv --verbose=4 "$NATIVE_EXE" 2>&1 | sed -n '1,12p' || true
+          codesign --verify --strict "$NATIVE_EXE"
+
+      - name: Upload native-update proofs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-update-proofs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/native-work/*
+            ${{ runner.temp }}/vidra-smoke/dist/release/releases*.json
           if-no-files-found: ignore
 
       # Uploaded even on failure, since a broken installer is worth inspecting.

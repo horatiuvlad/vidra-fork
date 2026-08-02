@@ -26,6 +26,29 @@ export const detectPlatform = (): string => {
 };
 
 export const detectProject = (cwd: string): ProjectInfo => {
+  const project = tryDetectProject(cwd);
+  if (project) return project;
+
+  console.error(
+    row({
+      glyph: "error",
+      detail: dim(
+        "Could not detect Vidra project. Run this command from your project root.",
+      ),
+    }),
+  );
+  console.error(
+    footer(dim("expected: package.json, ui/, src/<Name>.Host/<Name>.Host.csproj")),
+  );
+  process.exit(1);
+};
+
+/**
+ * The same search, without the exit. `vidra doctor` runs anywhere, including a
+ * repo root that is not an app, and "no project here" is a fact about the
+ * directory rather than a failure of the command.
+ */
+export const tryDetectProject = (cwd: string): ProjectInfo | null => {
   let dir = cwd;
   while (true) {
     const uiDir = path.join(dir, "ui");
@@ -57,18 +80,7 @@ export const detectProject = (cwd: string): ProjectInfo => {
     dir = parent;
   }
 
-  console.error(
-    row({
-      glyph: "error",
-      detail: dim(
-        "Could not detect Vidra project. Run this command from your project root.",
-      ),
-    }),
-  );
-  console.error(
-    footer(dim("expected: package.json, ui/, src/<Name>.Host/<Name>.Host.csproj")),
-  );
-  process.exit(1);
+  return null;
 };
 
 const findHostCsproj = (

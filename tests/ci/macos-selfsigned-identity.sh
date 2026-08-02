@@ -87,7 +87,16 @@ if ! security find-identity -p codesigning "$KEYCHAIN" | grep -q "$IDENTITY_CN";
   exit 1
 fi
 
+# Vidra's own `codesign` calls find the identity through the keychain search
+# list this script already extended, so they need no keychain argument. `vpk`
+# takes an explicit `--keychain`, and it wants a *path*: given the bare name it
+# answers "--keychain file is not found, but must exist".
+KEYCHAIN_PATH="$(security list-keychains -d user | tr -d ' "' | grep -F "$KEYCHAIN" | head -1)"
+KEYCHAIN_PATH="${KEYCHAIN_PATH:-$HOME/Library/Keychains/$KEYCHAIN}"
+
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "VIDRA_MACOS_CODESIGN_KEY=$IDENTITY_CN" >> "$GITHUB_ENV"
+  echo "VIDRA_MACOS_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 fi
 echo "==> VIDRA_MACOS_CODESIGN_KEY=$IDENTITY_CN"
+echo "==> VIDRA_MACOS_KEYCHAIN=$KEYCHAIN_PATH"
