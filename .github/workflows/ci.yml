@@ -681,6 +681,13 @@ jobs:
           node "$GITHUB_WORKSPACE/tests/ci/native-update-setup.mjs" \
             --project "$PWD" --name VidraSmoke --version 1.0.0 \
             --main-page "$GITHUB_WORKSPACE/tests/smoke/native-update-main-page.cs.in"
+          # A new package reference changes the dependency graph, and Mac
+          # Catalyst's incremental build happily reuses AOT images compiled
+          # against the old one — producing an app that aborts at launch with
+          # "Failed to load AOT module … because a dependency … is out of date".
+          # This job is the only place a Vidra app ever acquires a reference
+          # mid-build; a developer adds one and builds, which is what this is.
+          rm -rf src/VidraSmoke.Host/bin src/VidraSmoke.Host/obj
 
       # The feed is not serving during the build, so `vpk download` finds
       # nothing and warns — which is exactly the first-release case.
