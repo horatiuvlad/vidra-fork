@@ -13,8 +13,9 @@ import { resolveWindowsSigningConfig } from "./windows-signing.js";
 import { resolveVpk, vpkVersion } from "./velopack.js";
 import {
   enabledTiers,
-  hasUpdateBlock,
+  readUpdateBlockState,
   readUpdateConfig,
+  type UpdateBlockState,
   type UpdateConfig,
 } from "./update-config.js";
 import { tryDetectProject } from "./project.js";
@@ -542,12 +543,13 @@ export const checkVelopack = (required: boolean): Requirement => {
 export const diagnoseUpdateConfiguration = (input: {
   config: UpdateConfig | null;
   /**
-   * Whether `package.json` has a `vidra.updates` block at all. A block that
-   * parses to nothing — `feedURL` for `feedUrl` — leaves `config` null, and
-   * telling that apart from "no updates wanted" is the whole reason this flag
-   * is passed separately.
+   * What state the raw `vidra.updates` block is in. Every scaffolded app has
+   * one, blank, so its mere presence says nothing — but a block somebody has
+   * typed into that still turns nothing on is a mistake, and a block that
+   * parses to nothing (`feedURL` for `feedUrl`) leaves `config` null. Telling
+   * those apart is the whole reason this is passed separately.
    */
-  hasBlock: boolean;
+  blockState: UpdateBlockState;
   /** Source of `MauiProgram.cs`, or null when it could not be read. */
   mauiProgram: string | null;
   /** Source of the host `.csproj`, or null when it could not be read. */
@@ -558,7 +560,9 @@ export const diagnoseUpdateConfiguration = (input: {
   publishedUnsigned: boolean;
 }): Requirement[] => {
   const { config } = input;
-  if (!input.hasBlock) return [];
+  // Absent, or the blank block every fresh app ships: this app has said nothing
+  // about updates, and saying so back on every `doctor` run is noise.
+  if (input.blockState !== "edited") return [];
 
   const tiers = enabledTiers(config);
   const found: Requirement[] = [];
@@ -662,11 +666,10 @@ const inspectUpdateConfiguration = (): Requirement[] => {
   const project = tryDetectProject(process.cwd());
   if (!project) return [];
 
-  // No block at all: this app wants no updates, and every app now ships the
-  // updater, so its presence says nothing. Saying so on every `doctor` run is
-  // noise. A block that parses to nothing is a different answer — that is a
-  // typo, and it gets diagnosed.
-  if (!hasUpdateBlock(project.root)) return [];
+  // Every app ships the updater and a blank `vidra.updates` block, so neither
+  // says anything about intent. What does is somebody having typed into it.
+  const blockState = readUpdateBlockState(project.root);
+  if (blockState !== "edited") return [];
   const config = readUpdateConfig(project.root);
 
   const entryPoints: Record<string, string> = {};
@@ -685,7 +688,7 @@ const inspectUpdateConfiguration = (): Requirement[] => {
     ...(nativeWanted || resolveVpk() ? [checkVelopack(nativeWanted)] : []),
     ...diagnoseUpdateConfiguration({
       config,
-      hasBlock: true,
+      blockState,
       mauiProgram: readIfPresent(path.join(project.hostDir, "MauiProgram.cs")),
       csproj: readIfPresent(project.csprojPath),
       entryPoints,

@@ -7,6 +7,11 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { scaffoldDir, type Replacements } from "../scaffold.js";
 import { toPascalCase, toKebabCase, toTitleCase } from "../utils.js";
+import {
+  enabledTiers,
+  readUpdateBlockState,
+  readUpdateConfig,
+} from "../update-config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = path.resolve(__dirname, "../..");
@@ -165,9 +170,19 @@ describe("scaffold integration", () => {
       },
     );
 
-    it("ships no update configuration, so a fresh app checks nothing", async () => {
+    /**
+     * The switches are in package.json from the first scaffold, spelled
+     * correctly and empty. Filling one in is the entire opt-in, and there is
+     * no key left to misspell.
+     */
+    it("ships both switches, blank", async () => {
       const pkg = await fs.readJson(path.join(root, "package.json"));
-      expect(pkg.vidra?.updates).toBeUndefined();
+      expect(pkg.vidra.updates).toEqual({ feedUrl: "", native: { feedUrl: "" } });
+    });
+
+    it("reads as off, and as a block nobody has touched", async () => {
+      expect(enabledTiers(readUpdateConfig(root))).toEqual({ ota: false, native: false });
+      expect(readUpdateBlockState(root)).toBe("untouched");
     });
   });
 

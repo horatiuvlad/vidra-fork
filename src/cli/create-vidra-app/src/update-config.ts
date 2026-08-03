@@ -97,24 +97,46 @@ export const enabledTiers = (config: UpdateConfig | null): UpdateTiers => ({
 });
 
 /**
- * Whether the app has a `vidra.updates` block at all, whatever is in it.
+ * What state the app's `vidra.updates` block is in, which is a different
+ * question from what {@link readUpdateConfig} could make of it.
  *
- * Not the same question as {@link readUpdateConfig} returning something:
- * `{ "feedURL": "…" }` is a block that parses to nothing usable, which is the
- * exact shape a typo produces and is otherwise indistinguishable from an app
- * that wants no updates. Somebody has to be able to tell those apart, and it is
- * `vidra doctor` — the runtime deliberately cannot.
+ * - `absent` — no block. The app removed it, or predates the template that
+ *   ships one.
+ * - `untouched` — the block is there and every value in it is blank: the shape
+ *   a fresh scaffold has, waiting for a URL. Says nothing, wants nothing.
+ * - `edited` — somebody put something in it.
+ *
+ * The distinction exists for one reason. `{ "feedURL": "…" }` parses to nothing
+ * usable, so `readUpdateConfig` returns null — indistinguishable from an app
+ * that wants no updates, except that somebody clearly typed something. Only
+ * `vidra doctor` is in a position to notice, and it can only notice by looking
+ * at the raw block. (Pre-writing the keys makes that typo much harder to make;
+ * it does not make it impossible, and a `feedUrl` filled in beside a
+ * `channel` that turns nothing on looks the same.)
  */
-export const hasUpdateBlock = (projectRoot: string): boolean => {
+export type UpdateBlockState = "absent" | "untouched" | "edited";
+
+export const readUpdateBlockState = (projectRoot: string): UpdateBlockState => {
+  let updates: unknown;
   try {
     const pkg = fs.readJsonSync(path.join(projectRoot, "package.json")) as {
       vidra?: { updates?: unknown };
     };
-    const updates = pkg?.vidra?.updates;
-    return !!updates && typeof updates === "object";
+    updates = pkg?.vidra?.updates;
   } catch {
-    return false;
+    return "absent";
   }
+
+  if (!updates || typeof updates !== "object") return "absent";
+  return isBlank(updates) ? "untouched" : "edited";
+};
+
+/** True for `""`, `[]`, `{}`, and any nesting of those. `false` is not blank. */
+const isBlank = (value: unknown): boolean => {
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.every(isBlank);
+  if (value && typeof value === "object") return Object.values(value).every(isBlank);
+  return false;
 };
 
 export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {

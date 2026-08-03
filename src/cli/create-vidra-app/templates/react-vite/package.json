@@ -12,5 +12,13 @@
   },
   "devDependencies": {
     "create-vidra-app": "{{cliVersion}}"
+  },
+  "vidra": {
+    "updates": {
+      "feedUrl": "",
+      "native": {
+        "feedUrl": ""
+      }
+    }
   }
 }

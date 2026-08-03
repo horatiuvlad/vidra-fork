@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   enabledTiers,
+  readUpdateBlockState,
   readUpdateConfig,
   stampUpdateConfig,
   UPDATE_CONFIG_FILE,
@@ -252,5 +253,68 @@ describe("writeUpdateConfig", () => {
     });
 
     expect(config?.feedUrl).toBe("https://cdn/bundles.json");
+  });
+});
+
+/**
+ * Every scaffolded app ships the block with both switches spelled correctly and
+ * empty, so "there is a block" stopped being a signal — what somebody typed
+ * into it is.
+ */
+describe("readUpdateBlockState", () => {
+  let work: string;
+
+  beforeEach(() => {
+    work = nodeFs.mkdtempSync(path.join(os.tmpdir(), "vidra-block-state-"));
+  });
+
+  afterEach(() => {
+    nodeFs.rmSync(work, { recursive: true, force: true });
+  });
+
+  const write = (contents: object): string => {
+    nodeFs.writeFileSync(path.join(work, "package.json"), JSON.stringify(contents, null, 2));
+    return work;
+  };
+
+  it("is absent for an app with no block", () => {
+    expect(readUpdateBlockState(write({ name: "notes" }))).toBe("absent");
+  });
+
+  it("is absent when there is no package.json to read", () => {
+    expect(readUpdateBlockState(path.join(work, "nowhere"))).toBe("absent");
+  });
+
+  it("is untouched for exactly what the template ships", () => {
+    expect(
+      readUpdateBlockState(write({ vidra: { updates: { feedUrl: "", native: { feedUrl: "" } } } })),
+    ).toBe("untouched");
+  });
+
+  it("treats whitespace as untouched, since that is what a stray keystroke leaves", () => {
+    expect(readUpdateBlockState(write({ vidra: { updates: { feedUrl: "   " } } }))).toBe(
+      "untouched",
+    );
+  });
+
+  it("is edited as soon as either switch has a URL", () => {
+    expect(
+      readUpdateBlockState(write({ vidra: { updates: { feedUrl: "https://cdn/b.json" } } })),
+    ).toBe("edited");
+    expect(
+      readUpdateBlockState(write({ vidra: { updates: { native: { feedUrl: "https://cdn/" } } } })),
+    ).toBe("edited");
+  });
+
+  /** The case the whole tri-state exists for: typed into, and still off. */
+  it("is edited for a misspelled key, which is how doctor can see one", () => {
+    expect(
+      readUpdateBlockState(write({ vidra: { updates: { feedURL: "https://cdn/b.json" } } })),
+    ).toBe("edited");
+  });
+
+  /** `false` is a decision, not an empty field. */
+  it("is edited when a tier was deliberately switched off", () => {
+    expect(readUpdateBlockState(write({ vidra: { updates: { enabled: false } } }))).toBe("edited");
   });
 });

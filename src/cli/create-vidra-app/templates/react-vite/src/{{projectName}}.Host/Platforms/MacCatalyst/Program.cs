@@ -7,9 +7,9 @@
 // `VelopackApp.Build()...Run()` is anywhere other than the entry point.
 //
 // It is live from the first scaffold and does nothing at all until this app is
-// installed from a Velopack release — which it is not, until `package.json`
-// carries a `vidra.updates.native.feedUrl` and `vidra build` packs one. That
-// URL is the whole opt-in: `npx vidra updates init --feed <url> --native`.
+// installed from a Velopack release — which it is not, until `package.json`'s
+// `vidra.updates.native.feedUrl` (already there, empty) names a feed and
+// `vidra build` packs one. Filling in that URL is the whole opt-in.
 //
 // `UseVidraLocator()` is the Mac Catalyst part. Velopack's client picks its
 // locator from `RuntimeInformation.IsOSPlatform`, which answers false for OSX

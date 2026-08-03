@@ -210,6 +210,7 @@ describe("newestPackVersion", () => {
  * only place a typo can surface.
  */
 describe("diagnoseUpdateConfiguration", () => {
+  const EDITED = "edited" as const;
   const WIRED = "builder.UseVidra().UseVidraUpdates().UseVidraNativeUpdates();";
   const ENTRY_POINTS = {
     MacCatalyst: "VelopackApp.Build().UseVidraLocator().Run();",
@@ -218,7 +219,7 @@ describe("diagnoseUpdateConfiguration", () => {
 
   const clean = {
     config: null as Parameters<typeof diagnoseUpdateConfiguration>[0]["config"],
-    hasBlock: false,
+    blockState: "absent" as const,
     mauiProgram: WIRED,
     csproj: '<PackageReference Include="Vidra.Updates.Native" Version="0.5.0" />',
     entryPoints: ENTRY_POINTS,
@@ -232,9 +233,17 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(diagnoseUpdateConfiguration(clean)).toEqual([]);
   });
 
+  /**
+   * Every scaffolded app ships the block, blank. Its presence is not a signal,
+   * and reporting it would fire on every fresh app.
+   */
+  it("says nothing about the blank block a fresh scaffold ships", () => {
+    expect(diagnoseUpdateConfiguration({ ...clean, blockState: "untouched" })).toEqual([]);
+  });
+
   it("says nothing about a scaffolded app with a feed", () => {
     expect(
-      diagnoseUpdateConfiguration({ ...clean, hasBlock: true, config: { feedUrl: "https://cdn/bundles.json" } }),
+      diagnoseUpdateConfiguration({ ...clean, blockState: EDITED, config: { feedUrl: "https://cdn/bundles.json" } }),
     ).toEqual([]);
   });
 
@@ -244,7 +253,7 @@ describe("diagnoseUpdateConfiguration", () => {
    * which is indistinguishable at runtime from an app that wants no updates.
    */
   it("catches a block that turns nothing on", () => {
-    expect(names({ ...clean, hasBlock: true, config: { channel: "stable" } })).toEqual(["Update feed"]);
+    expect(names({ ...clean, blockState: EDITED, config: { channel: "stable" } })).toEqual(["Update feed"]);
   });
 
   /**
@@ -253,13 +262,13 @@ describe("diagnoseUpdateConfiguration", () => {
    * sitting there in package.json.
    */
   it("catches a block whose only key is misspelled", () => {
-    expect(names({ ...clean, hasBlock: true, config: null })).toEqual(["Update feed"]);
+    expect(names({ ...clean, blockState: EDITED, config: null })).toEqual(["Update feed"]);
   });
 
   it("says so plainly when a feed is switched off rather than missing", () => {
     const [found] = diagnoseUpdateConfiguration({
       ...clean,
-      hasBlock: true,
+      blockState: EDITED,
       config: { feedUrl: "https://cdn/bundles.json", enabled: false },
     });
 
@@ -271,7 +280,7 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       names({
         ...clean,
-        hasBlock: true,
+        blockState: EDITED,
         config: { feedUrl: "https://cdn/bundles.json", native: { channel: "osx" } },
       }),
     ).toEqual(["Native feed"]);
@@ -286,7 +295,7 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       names({
         ...clean,
-        hasBlock: true,
+        blockState: EDITED,
         config: { feedUrl: "https://cdn/bundles.json" },
         mauiProgram: "builder.UseVidra();",
       }),
@@ -297,7 +306,7 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       names({
         ...clean,
-        hasBlock: true,
+        blockState: EDITED,
         config: { feedUrl: "https://cdn/bundles.json", native: { feedUrl: "https://cdn/" } },
         mauiProgram: "builder.UseVidra().UseVidraUpdates();",
         csproj: '<PackageReference Include="Vidra.Hosting.Maui" Version="0.4.0" />',
@@ -318,7 +327,7 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       names({
         ...clean,
-        hasBlock: true,
+        blockState: EDITED,
         config: { feedUrl: "https://cdn/b.json", native: { feedUrl: "https://cdn/" } },
         entryPoints: { MacCatalyst: "// VelopackApp.Build().UseVidraLocator().Run();" },
       }),
@@ -334,7 +343,7 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       names({
         ...clean,
-        hasBlock: true,
+        blockState: EDITED,
         config: { feedUrl: "https://cdn/bundles.json", publicKeys: ["k"] },
         publishedUnsigned: true,
       }),
@@ -345,7 +354,7 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       diagnoseUpdateConfiguration({
         ...clean,
-        hasBlock: true,
+        blockState: EDITED,
         config: { feedUrl: "https://cdn/bundles.json" },
         publishedUnsigned: true,
       }),
@@ -364,7 +373,7 @@ describe("diagnoseUpdateConfiguration", () => {
       "builder.UseMauiApp<App>().UseVidra();",
     ].join("\n");
 
-    expect(names({ ...clean, hasBlock: true, config: { feedUrl: "https://cdn/bundles.json" }, mauiProgram: template }))
+    expect(names({ ...clean, blockState: EDITED, config: { feedUrl: "https://cdn/bundles.json" }, mauiProgram: template }))
       .toEqual(["OTA updates wired up"]);
   });
 
@@ -377,7 +386,7 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       names({
         ...clean,
-        hasBlock: true,
+        blockState: EDITED,
         config: { feedUrl: "https://cdn/b.json", native: { feedUrl: "https://cdn/" } },
         mauiProgram: null,
         csproj: null,

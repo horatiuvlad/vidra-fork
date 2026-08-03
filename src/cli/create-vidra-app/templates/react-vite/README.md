@@ -77,16 +77,28 @@ npm run build
 
 ### Updates
 
-This app already ships the updater, wired up and checking nothing. Give it a
-feed URL and it starts:
+This app already ships the updater, wired up and checking nothing. Both switches
+are in `package.json`, empty:
+
+```json
+"vidra": {
+  "updates": {
+    "feedUrl": "",
+    "native": { "feedUrl": "" }
+  }
+}
+```
+
+Fill either one in and that tier starts: `feedUrl` publishes new `ui/` builds,
+`native.feedUrl` publishes whole-app releases. The command does the same thing
+and derives the second URL from the first:
 
 ```bash
 npx vidra updates init --feed https://updates.example.com/bundles.json --native
 ```
 
-That writes a `vidra.updates` block into `package.json` — the URL is the only
-switch. `npx vidra bundle` then publishes a new `ui/` build that installs on the
-next launch, and `npx vidra build` packs a whole-app release for the same feed.
+`npx vidra bundle` then publishes a new `ui/` build that installs on the next
+launch, and `npx vidra build` packs a whole-app release for the same feed.
 `npx vidra updates` shows what is on.
 
 ## Project Structure

@@ -254,13 +254,13 @@ const printStatus = (): void => {
 
   console.log(header("updates", project.projectName));
 
-  tierRow("web bundle", tiers.ota, config?.feedUrl, config?.enabled, "vidra updates init --feed <url>");
+  tierRow("web bundle", tiers.ota, config?.feedUrl, config?.enabled, "vidra.updates.feedUrl");
   tierRow(
     "whole app",
     tiers.native,
     config?.native?.feedUrl,
     config?.native?.enabled,
-    "vidra updates init --native <url>",
+    "vidra.updates.native.feedUrl",
   );
 
   const keys = config?.publicKeys?.length ?? 0;
@@ -287,7 +287,7 @@ const printStatus = (): void => {
     console.log(
       footer(
         dim(
-          `this app ships the updater and checks nothing. give it a feed: ${lime("npx vidra updates init --feed <url>")}`,
+          `the fields are in package.json waiting for a URL — fill one in, or: ${lime("npx vidra updates init --feed <url>")}`,
         ),
       ),
     );
@@ -302,7 +302,7 @@ const tierRow = (
   on: boolean,
   feedUrl: string | undefined,
   enabled: boolean | undefined,
-  how: string,
+  field: string,
 ): void => {
   console.log(
     row({
@@ -314,8 +314,8 @@ const tierRow = (
         : feedUrl
           ? dim(`${feedUrl} ${amber("(enabled: false)")}`)
           : enabled === false
-            ? dim("off, and no feed URL")
-            : dim(`off — ${how}`),
+            ? dim(`off — ${field} is empty, and enabled is false`)
+            : dim(`off — ${field} is empty`),
     }),
   );
 };

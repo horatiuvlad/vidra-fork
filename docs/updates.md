@@ -14,31 +14,35 @@ second is for the releases that change C#.
 
 ## Turning them on
 
-**A feed URL is the only switch.** Every scaffolded app already ships the whole
-updater — both tiers wired into `MauiProgram`, `Vidra.Updates.Native`
-referenced, `VelopackApp.Build()...Run()` live in both entry points — and every
-part of it resolves to nothing until a URL says otherwise. So there is one step,
-and it is the only one you can forget:
-
-```bash
-npx vidra updates init --feed https://updates.example.com/bundles.json --native
-```
-
-which writes this into your app's own `package.json`:
+**A feed URL is the only switch**, and it is already in your `package.json`,
+empty:
 
 ```json
 {
   "vidra": {
     "updates": {
-      "feedUrl": "https://updates.example.com/bundles.json",
-      "native": { "feedUrl": "https://updates.example.com/" }
+      "feedUrl": "",
+      "native": { "feedUrl": "" }
     }
   }
 }
 ```
 
-Drop `--native` for web-bundle updates only; pass `--native <url>` to put the app
-releases somewhere else. `npx vidra updates` shows which tiers are on.
+Fill either one in and that tier starts checking. Nothing else: every scaffolded
+app already ships the whole updater — both tiers wired into `MauiProgram`,
+`Vidra.Updates.Native` referenced, `VelopackApp.Build()...Run()` live in both
+entry points — and every part of it resolves to nothing until one of those URLs
+does not.
+
+There is a command, for scripts and for deriving one URL from the other:
+
+```bash
+npx vidra updates init --feed https://updates.example.com/app/bundles.json --native
+```
+
+`--native` with no value puts the app releases in the same directory the
+bundles.json lives in; `--native <url>` puts them somewhere else; drop it for
+web-bundle updates only. `npx vidra updates` shows which tiers are on.
 
 `vidra build` stamps the block into the app, so the feed URL lives next to the
 version in the file that already owns it. Optional keys: `channel` (only entries
@@ -303,7 +307,7 @@ Two things, and `npx vidra doctor` names whichever is missing.
 dotnet tool install -g vpk
 ```
 
-**2. Point it at a feed:**
+**2. Point it at a feed** — fill in `vidra.updates.native.feedUrl`, or:
 
 ```bash
 npx vidra updates init --native https://updates.example.com/app/
@@ -403,9 +407,9 @@ What comes out, beside the usual artifact:
 
 Older scaffolds shipped the updater commented out, and turning it on took five
 steps. Nothing about them stopped working — a `vidra.updates` block still turns
-on whatever that app has wired up — but four of the five are now in the
-template, and `npx vidra doctor` names any that yours is missing. To catch up,
-in your host project:
+on whatever that app has wired up — but all five are now in the template (four
+of them live, the fifth as two empty fields), and `npx vidra doctor` names any
+that yours is missing. To catch up, in your host project:
 
 1. add `<PackageReference Include="Vidra.Updates.Native" Version="0.5.0" />`
 2. add `.UseVidraUpdates().UseVidraNativeUpdates()` after `.UseVidra()`
