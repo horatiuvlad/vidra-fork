@@ -40,18 +40,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             10.0.x
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: |
             src/cli/create-vidra-app/package-lock.json
@@ -62,7 +62,7 @@ jobs:
       # the project files, so a hit makes every later restore in the job (the
       # dogfood host, pack-local.sh, the scaffolded app) essentially free.
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', 'pack-local.sh') }}
@@ -204,7 +204,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotnet-trx
           path: "**/TestResults/*.trx"
@@ -249,18 +249,18 @@ jobs:
     # headless runner can never answer.
     timeout-minutes: 100
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             10.0.x
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: |
             src/cli/create-vidra-app/package-lock.json
@@ -271,7 +271,7 @@ jobs:
       # the project files, so a hit makes every later restore in the job (the
       # dogfood host, pack-local.sh, the scaffolded app) essentially free.
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', 'pack-local.sh') }}
@@ -647,7 +647,7 @@ jobs:
 
       - name: Upload OTA proofs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ota-proofs-${{ matrix.os }}
           path: ${{ runner.temp }}/ota-work/*.json
@@ -804,7 +804,7 @@ jobs:
 
       - name: Upload native-update proofs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-update-proofs-${{ matrix.os }}
           path: |
@@ -819,7 +819,7 @@ jobs:
       # would bury an earlier real failure under a second, confusing one.
       - name: Upload packaged installer
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vidra-installer-${{ matrix.os }}
           path: ${{ runner.temp }}/vidra-smoke/dist/*

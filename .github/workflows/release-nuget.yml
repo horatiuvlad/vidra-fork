@@ -43,10 +43,10 @@ jobs:
             artifact: nupkgs-windows
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             10.0.x
@@ -69,7 +69,7 @@ jobs:
         run: ./pack-local.sh
 
       - name: Upload per-OS packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/packages/*.nupkg
@@ -80,27 +80,31 @@ jobs:
     needs: pack
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             10.0.x
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.x"
 
+      # Both halves of the handoff are by name, which is the case the artifact
+      # actions have kept stable across majors: the v5 path change applied to
+      # downloads by artifact-ids, and the digest check v8 promotes from warning
+      # to error is a check on our own upload from the pack job.
       - name: Download macOS packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nupkgs-macos
           path: pkg-macos
 
       - name: Download Windows packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nupkgs-windows
           path: pkg-windows
@@ -109,7 +113,7 @@ jobs:
         run: python3 scripts/merge-nupkgs.py --inputs pkg-macos pkg-windows --output merged
 
       - name: Upload merged packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nupkgs-merged
           path: merged/*.nupkg
