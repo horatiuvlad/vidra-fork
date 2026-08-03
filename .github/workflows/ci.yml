@@ -572,6 +572,33 @@ jobs:
           ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT" `
             -Cli "$env:GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
 
+      # Uploaded here, while dist/ still holds exactly one file, rather than at
+      # the end of the job. Everything below builds the same scaffold again into
+      # the same dist/ and nothing ever cleans it (the OTA rebuild, then 1.0.0
+      # and 1.0.1 with Velopack's accumulating feed), so uploading at the end
+      # shipped every copy at once: 804 MB on Windows and 216 MB on macOS to
+      # carry one 88 MB / 33 MB installer. Worse, the OTA rebuild below
+      # overwrites this very filename, so that artifact carried bytes no step
+      # had signature-checked or launched. From here it carries the file the
+      # verify-and-launch steps above just ran, and nothing between them and
+      # this step writes into dist/: the launch scripts stage into their own
+      # temp directories. The update-enabled rebuild is deliberately not
+      # uploaded, since the OTA round-trip runs the binary from bin/Release and
+      # never anything in dist/, so that file was never the thing under test.
+      #
+      # Still uploaded on failure, since a broken installer is worth inspecting.
+      # Staying lenient here is deliberate: the strict gate is the
+      # "Verify a distributable artifact was produced" step above, which asserts
+      # exactly one artifact of the expected type. Making the upload strict too
+      # would bury an earlier real failure under a second, confusing one.
+      - name: Upload packaged installer
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vidra-installer-${{ matrix.os }}
+          path: ${{ runner.temp }}/vidra-smoke/dist/*
+          if-no-files-found: ignore
+
       # ---- Over-the-air bundle updates ----
       #
       # A second build of the same scaffold, configured for updates and driven
@@ -807,20 +834,21 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: native-update-proofs-${{ matrix.os }}
+          # The whole feed index, not just releases.<channel>.json: RELEASES* is
+          # Velopack's legacy client index and assets.<channel>.json its upload
+          # manifest, and "the feed is malformed for an older client" is a
+          # different failure from "the JSON is wrong". The whole index is about
+          # 1.2 KB. The delta comes along because Windows is the leg
+          # that applies it (`feed 200 com.vidra.smoke-1.0.1-delta.nupkg`, 255
+          # KB against a 94 MB full package), and it is the one feed file the
+          # `ls -la dist/release` above cannot show you the inside of. Catalyst
+          # applies the full package instead, so on macOS the delta is evidence
+          # about what the feed published rather than about the bytes that were
+          # applied. The full packages stay out at 32-94 MB each; their sizes
+          # and SHA256s are already in releases.<channel>.json.
           path: |
             ${{ runner.temp }}/native-work/*
-            ${{ runner.temp }}/vidra-smoke/dist/release/releases*.json
-          if-no-files-found: ignore
-
-      # Uploaded even on failure, since a broken installer is worth inspecting.
-      # Staying lenient here is deliberate: the strict gate is the
-      # "Verify a distributable artifact was produced" step above, which asserts
-      # exactly one artifact of the expected type. Making the upload strict too
-      # would bury an earlier real failure under a second, confusing one.
-      - name: Upload packaged installer
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: vidra-installer-${{ matrix.os }}
-          path: ${{ runner.temp }}/vidra-smoke/dist/*
+            ${{ runner.temp }}/vidra-smoke/dist/release/*.json
+            ${{ runner.temp }}/vidra-smoke/dist/release/RELEASES*
+            ${{ runner.temp }}/vidra-smoke/dist/release/*delta.nupkg
           if-no-files-found: ignore
