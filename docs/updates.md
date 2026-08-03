@@ -385,6 +385,7 @@ What comes out, beside the usual artifact:
 | `vidra updates init --feed <url>` | web-bundle updates on |
 | `vidra updates init --feed <url> --native` | both, sharing one host |
 | `vidra updates init --native <url>` | whole-app updates on, alone or elsewhere |
+| `vidra updates init --channel <name>` | label this app's web-bundle channel |
 | `vidra updates init --keygen` | also generate a signing key and trust it |
 | `vidra updates init … --force` | move a feed that installed apps are already checking |
 

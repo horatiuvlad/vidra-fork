@@ -16,14 +16,14 @@ import {
 } from "../theme.js";
 
 /**
- * `vidra updates` — the one route between "I have a URL" and an app that
- * updates.
+ * `vidra updates` — reading and writing the only switch there is.
  *
- * Every scaffolded app already carries the whole updater; the only thing
- * separating it from a working one is a feed URL in `package.json`. So this
- * command writes exactly that, and `vidra updates` with no arguments reads back
- * what it wrote, because the same field being present is the entire on switch
- * and a developer should be able to see it without knowing where to look.
+ * Every scaffolded app already carries the whole updater *and* both feed URLs,
+ * blank, in its own `package.json`. Typing one in is the entire opt-in, so this
+ * command is a convenience rather than a gate: `init` writes the same fields a
+ * hand-edit would (deriving the native URL from the OTA one, and wiring a
+ * signing key if asked), and `vidra updates` with no arguments reads back which
+ * tiers that left on.
  */
 export const updatesCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
