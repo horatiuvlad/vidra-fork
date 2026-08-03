@@ -11,7 +11,12 @@ import {
 import { resolveNotaryCredentials } from "./notarize.js";
 import { resolveWindowsSigningConfig } from "./windows-signing.js";
 import { resolveVpk, vpkVersion } from "./velopack.js";
-import { readUpdateConfig, type UpdateConfig } from "./update-config.js";
+import {
+  enabledTiers,
+  hasUpdateBlock,
+  readUpdateConfig,
+  type UpdateConfig,
+} from "./update-config.js";
 import { tryDetectProject } from "./project.js";
 
 const DOTNET = process.platform === "win32" ? "dotnet.exe" : "dotnet";
@@ -511,56 +516,125 @@ export const checkVelopack = (required: boolean): Requirement => {
     name: "Velopack (vpk)",
     status: required ? "missing" : "unknown",
     detail: required
-      ? "vidra.updates.native is configured but vpk is not installed, so `vidra build --native-update` cannot run"
-      : "not installed, and only needed for `vidra build --native-update`",
+      ? "vidra.updates.native.feedUrl is set but vpk is not installed, so `vidra build` cannot pack a release"
+      : "not installed, and only needed once an app publishes whole-app updates",
     fix: "dotnet tool install -g vpk",
   };
 };
 
 /**
- * The half-configured states, each of which produces an app that builds
- * cleanly and never updates.
+ * What is left to get wrong once a feed URL is the only switch.
  *
- * This is the one part of the update story that cannot report itself. An app
- * with no `vidra.updates` block logs nothing at runtime, deliberately, so a
- * misspelled key is indistinguishable from "updates not wanted", and the
- * symptom arrives much later, as nobody receiving an update.
+ * Every scaffolded app carries the whole updater, so the states below are not
+ * "did you wire it up" any more — they are the two things a URL cannot fix: a
+ * config that turns nothing on, and an app scaffolded before the updater
+ * shipped live, whose own source is missing the parts a package cannot
+ * retrofit.
+ *
+ * It still has to be `doctor` that says so. An app with nothing configured logs
+ * nothing at runtime, deliberately, so a misspelled key is indistinguishable
+ * from "updates not wanted" and the symptom arrives much later, as nobody
+ * receiving an update.
  *
  * A pure function over what was read, so every state below is a unit test
  * rather than a scaffolded app someone has to break by hand.
  */
 export const diagnoseUpdateConfiguration = (input: {
   config: UpdateConfig | null;
+  /**
+   * Whether `package.json` has a `vidra.updates` block at all. A block that
+   * parses to nothing — `feedURL` for `feedUrl` — leaves `config` null, and
+   * telling that apart from "no updates wanted" is the whole reason this flag
+   * is passed separately.
+   */
+  hasBlock: boolean;
   /** Source of `MauiProgram.cs`, or null when it could not be read. */
   mauiProgram: string | null;
+  /** Source of the host `.csproj`, or null when it could not be read. */
+  csproj: string | null;
+  /** Sources of `Platforms/*&#47;Program.cs` that exist, keyed by platform. */
+  entryPoints: Record<string, string>;
   /** True when a `bundles.json` has been published but no `.sig` sits beside it. */
   publishedUnsigned: boolean;
 }): Requirement[] => {
   const { config } = input;
-  // Comments first. The scaffolded MauiProgram explains how to turn updates on,
-  // and that explanation names the very call being looked for, so a naive
-  // substring search reports every fresh app as already wired up.
-  const mauiProgram = input.mauiProgram === null ? null : stripComments(input.mauiProgram);
-  const usesUpdates = mauiProgram?.includes(".UseVidraUpdates(") ?? false;
-  const usesNative = mauiProgram?.includes(".UseVidraNativeUpdates(") ?? false;
+  if (!input.hasBlock) return [];
+
+  const tiers = enabledTiers(config);
   const found: Requirement[] = [];
 
-  if (config && !usesUpdates && mauiProgram !== null) {
+  // A block that exists and turns nothing on is almost always a typo — and it
+  // is the one mistake nothing else can catch, because a misspelled `feedUrl`
+  // reads exactly like an app that wants no updates.
+  if (!tiers.ota && !tiers.native) {
+    found.push({
+      name: "Update feed",
+      status: "missing",
+      detail:
+        config?.enabled === false || config?.native?.enabled === false
+          ? "vidra.updates is switched off with enabled: false — nothing is checked"
+          : "vidra.updates has no feedUrl, so nothing is ever checked (a misspelled key looks exactly like this)",
+      fix: "npx vidra updates init --feed <url>",
+    });
+    return found;
+  }
+
+  // A native block with a channel or a packId but no URL: the release packs, and
+  // no installed app has anywhere to look for it.
+  if (config?.native && !config.native.feedUrl && config.native.enabled !== false) {
+    found.push({
+      name: "Native feed",
+      status: "missing",
+      detail: "vidra.updates.native has no feedUrl, so whole-app updates stay off",
+      fix: "npx vidra updates init --native <url>",
+    });
+  }
+
+  // Comments first. The scaffolded sources explain themselves, and those
+  // explanations name the very calls being looked for, so a naive substring
+  // search reports every app as already wired up.
+  const mauiProgram = input.mauiProgram === null ? null : stripComments(input.mauiProgram);
+
+  if (tiers.ota && mauiProgram !== null && !mauiProgram.includes(".UseVidraUpdates(")) {
     found.push({
       name: "OTA updates wired up",
       status: "missing",
-      detail: "package.json configures vidra.updates, but MauiProgram never calls .UseVidraUpdates()",
+      detail: "a feed is configured, but MauiProgram never calls .UseVidraUpdates()",
       fix: "add .UseVidraUpdates() after .UseVidra() in MauiProgram.cs",
     });
   }
 
-  if (!config && usesUpdates) {
-    found.push({
-      name: "OTA updates configured",
-      status: "missing",
-      detail: ".UseVidraUpdates() is called, but package.json has no vidra.updates block, nothing is ever checked",
-      fix: 'add "vidra": { "updates": { "feedUrl": "https://..." } } to package.json',
-    });
+  if (tiers.native) {
+    if (mauiProgram !== null && !mauiProgram.includes(".UseVidraNativeUpdates(")) {
+      found.push({
+        name: "Native updates wired up",
+        status: "missing",
+        detail: "a native feed is configured, but MauiProgram never calls .UseVidraNativeUpdates()",
+        fix: "add .UseVidraNativeUpdates() after .UseVidra() in MauiProgram.cs",
+      });
+    }
+
+    if (input.csproj !== null && !input.csproj.includes("Vidra.Updates.Native")) {
+      found.push({
+        name: "Velopack package",
+        status: "missing",
+        detail: "the host project does not reference Vidra.Updates.Native, so there is no updater to run",
+        fix: '<PackageReference Include="Vidra.Updates.Native" Version="..." /> in the host .csproj',
+      });
+    }
+
+    // The one thing a package reference cannot retrofit. Missing here means the
+    // app installs and launches perfectly and never handles a Velopack hook.
+    for (const [platform, source] of Object.entries(input.entryPoints)) {
+      if (!stripComments(source).includes("VelopackApp.Build(")) {
+        found.push({
+          name: `Velopack entry point (${platform})`,
+          status: "missing",
+          detail: `Platforms/${platform}/Program.cs never calls VelopackApp.Build()...Run(), so install and update hooks are ignored`,
+          fix: "VelopackApp.Build().UseVidraLocator().Run(); as the first line of Main",
+        });
+      }
+    }
   }
 
   if (input.publishedUnsigned && (config?.publicKeys?.length ?? 0) > 0) {
@@ -570,25 +644,6 @@ export const diagnoseUpdateConfiguration = (input: {
       detail: "publicKeys are configured, so signatures are mandatory, but the published bundles.json has no .sig beside it",
       fix: "republish with `vidra bundle --sign <key.pem>`",
     });
-  }
-
-  if (config?.native) {
-    if (!usesNative && mauiProgram !== null) {
-      found.push({
-        name: "Native updates wired up",
-        status: "missing",
-        detail: "vidra.updates.native is configured, but MauiProgram never calls .UseVidraNativeUpdates()",
-        fix: "add .UseVidraNativeUpdates() after .UseVidra(), and reference Vidra.Updates.Native",
-      });
-    }
-    if (!config.native.feedUrl) {
-      found.push({
-        name: "Native feed",
-        status: "missing",
-        detail: "vidra.updates.native has no feedUrl: releases can be packed, and no installed app will ever find them",
-        fix: 'set "vidra": { "updates": { "native": { "feedUrl": "https://.../" } } }',
-      });
-    }
   }
 
   return found;
@@ -607,22 +662,35 @@ const inspectUpdateConfiguration = (): Requirement[] => {
   const project = tryDetectProject(process.cwd());
   if (!project) return [];
 
+  // No block at all: this app wants no updates, and every app now ships the
+  // updater, so its presence says nothing. Saying so on every `doctor` run is
+  // noise. A block that parses to nothing is a different answer — that is a
+  // typo, and it gets diagnosed.
+  if (!hasUpdateBlock(project.root)) return [];
   const config = readUpdateConfig(project.root);
-  const mauiProgram = readIfPresent(path.join(project.hostDir, "MauiProgram.cs"));
 
-  // Nothing configured and nothing called: this app does not want updates, and
-  // saying so on every `doctor` run is noise.
-  const live = mauiProgram === null ? "" : stripComments(mauiProgram);
-  if (!config && !live.includes("Updates(")) {
-    return [];
+  const entryPoints: Record<string, string> = {};
+  for (const platform of ["MacCatalyst", "Windows"]) {
+    const source = readIfPresent(
+      path.join(project.hostDir, "Platforms", platform, "Program.cs"),
+    );
+    if (source !== null) entryPoints[platform] = source;
   }
 
   const bundles = path.join(project.root, "dist", "bundles.json");
   const publishedUnsigned = fs.existsSync(bundles) && !fs.existsSync(`${bundles}.sig`);
+  const nativeWanted = enabledTiers(config).native;
 
   return [
-    ...(config?.native || resolveVpk() ? [checkVelopack(!!config?.native)] : []),
-    ...diagnoseUpdateConfiguration({ config, mauiProgram, publishedUnsigned }),
+    ...(nativeWanted || resolveVpk() ? [checkVelopack(nativeWanted)] : []),
+    ...diagnoseUpdateConfiguration({
+      config,
+      hasBlock: true,
+      mauiProgram: readIfPresent(path.join(project.hostDir, "MauiProgram.cs")),
+      csproj: readIfPresent(project.csprojPath),
+      entryPoints,
+      publishedUnsigned,
+    }),
   ];
 };
 

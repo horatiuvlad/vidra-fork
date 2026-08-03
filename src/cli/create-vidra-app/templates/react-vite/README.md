@@ -75,6 +75,20 @@ npm run dev:host:windows
 npm run build
 ```
 
+### Updates
+
+This app already ships the updater, wired up and checking nothing. Give it a
+feed URL and it starts:
+
+```bash
+npx vidra updates init --feed https://updates.example.com/bundles.json --native
+```
+
+That writes a `vidra.updates` block into `package.json` — the URL is the only
+switch. `npx vidra bundle` then publishes a new `ui/` build that installs on the
+next launch, and `npx vidra build` packs a whole-app release for the same feed.
+`npx vidra updates` shows what is on.
+
 ## Project Structure
 
 ```

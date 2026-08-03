@@ -2,47 +2,58 @@
 
 Vidra apps update in two tiers. Use either, both, or neither.
 
-| | ships | mechanism | needs |
+| | ships | mechanism | turned on by |
 |---|---|---|---|
-| **Over-the-air** | your `ui/` build | a new bundle, applied on the next launch | nothing extra |
-| **[Native](#native-whole-app-updates)** | the whole app, native code included | Velopack replaces the install in place | `Vidra.Updates.Native` + `vpk` |
+| **Web bundle** | your `ui/` build | a new bundle, applied on the next launch | `vidra.updates.feedUrl` |
+| **[Whole app](#whole-app-updates)** | the app, native code included | Velopack replaces the install in place | `vidra.updates.native.feedUrl` |
 
 Most of this document is about the first. It is the one you reach for weekly: a
-bundle is small, needs no installer, and can never get ahead of the binary,
+bundle is small, needs no installer, and can never get ahead of the binary —
 it installs only when its contract fingerprints match the running host. The
 second is for the releases that change C#.
 
-Both are **off** until you ask for them, and both read one `vidra.updates` block.
-
 ## Turning them on
 
-Two changes to a scaffolded app.
+**A feed URL is the only switch.** Every scaffolded app already ships the whole
+updater — both tiers wired into `MauiProgram`, `Vidra.Updates.Native`
+referenced, `VelopackApp.Build()...Run()` live in both entry points — and every
+part of it resolves to nothing until a URL says otherwise. So there is one step,
+and it is the only one you can forget:
 
-**1. Opt in, in `MauiProgram.cs`:**
-
-```csharp
-builder
-    .UseMauiApp<App>()
-    .UseVidra()
-    .UseVidraUpdates();
+```bash
+npx vidra updates init --feed https://updates.example.com/bundles.json --native
 ```
 
-**2. Point it at a feed, in your app's `package.json`:**
+which writes this into your app's own `package.json`:
 
 ```json
 {
   "vidra": {
     "updates": {
-      "feedUrl": "https://updates.example.com/bundles.json"
+      "feedUrl": "https://updates.example.com/bundles.json",
+      "native": { "feedUrl": "https://updates.example.com/" }
     }
   }
 }
 ```
 
-`vidra build` stamps that block into the app, so the feed URL lives next to the
+Drop `--native` for web-bundle updates only; pass `--native <url>` to put the app
+releases somewhere else. `npx vidra updates` shows which tiers are on.
+
+`vidra build` stamps the block into the app, so the feed URL lives next to the
 version in the file that already owns it. Optional keys: `channel` (only entries
-labelled with the same one are considered) and `enabled: false` (a kill switch
-that still lets an already-downloaded bundle finish promoting).
+labelled with the same one are considered) and `enabled: false` (a kill switch,
+per tier, that keeps the URL and still lets an already-downloaded bundle finish
+promoting).
+
+> **Why it ships live rather than opt-in.** Two of the four pieces — the entry
+> point that runs before the UI framework, and the package reference that
+> changes the dependency graph — cannot be retrofitted by configuration, and
+> asking an app that has already shipped to take over its own `Main` is a
+> migration nobody wants. Carrying them from the first scaffold costs ~280 KB of
+> managed code in a self-contained .NET + MAUI app, and buys a feature that
+> turns on with a URL. An app that never configures one checks nothing, writes
+> nothing, and logs nothing.
 
 ## Publishing
 
@@ -201,10 +212,12 @@ your CDN and code running on your users' machines. **Sign the feed before it is
 public.**
 
 ```bash
-npx vidra keygen                  # writes vidra-signing-key.pem (+ .pub)
+npx vidra updates init --keygen   # writes the key and trusts it, in one step
 ```
 
-Add the public half to your app's `package.json` and rebuild:
+That writes `vidra-signing-key.pem` (+ `.pub`) and adds the public half to
+`publicKeys`. `npx vidra keygen` does the same without touching `package.json`,
+for when you are rotating a key by hand. Either way what lands is:
 
 ```json
 {
@@ -275,14 +288,14 @@ cd dist && python3 -m http.server 8099
 `VIDRA_UPDATE_FEED_URL` overrides the stamped feed at runtime, which is the
 easiest way to point a build at staging without rebuilding it.
 
-## Native (whole-app) updates
+## Whole-app updates
 
 For the releases that change C#. Vidra drives [Velopack](https://velopack.io),
 `vidra build` shells out to `vpk`, and the app talks to Velopack's client
 directly. Vidra owns neither; what it adds is the plumbing, and a locator that
 teaches Velopack what Mac Catalyst is.
 
-Four steps, and `npx vidra doctor` names whichever one is missing.
+Two things, and `npx vidra doctor` names whichever is missing.
 
 **1. Install the tool** (once per machine):
 
@@ -290,55 +303,32 @@ Four steps, and `npx vidra doctor` names whichever one is missing.
 dotnet tool install -g vpk
 ```
 
-**2. Reference the package** in your host `.csproj`:
+**2. Point it at a feed:**
 
-```xml
-<PackageReference Include="Vidra.Updates.Native" Version="0.4.0" />
+```bash
+npx vidra updates init --native https://updates.example.com/app/
 ```
 
-**3. Uncomment the two lines** the template already shipped in
-`Platforms/MacCatalyst/Program.cs` and `Platforms/Windows/Program.cs`, and add
-the builder call:
+The two `feedUrl`s differ in kind: the web-bundle one names a *file*, the native
+one names the *directory* `vpk` writes into. They can share a prefix —
+`releases.{channel}.json` and `bundles.json` never collide — which is what
+`--native` with no URL of its own gives you.
 
-```csharp
-// Platforms/*/Program.cs: before anything else runs
-VelopackApp.Build().UseVidraLocator().Run();
-```
-
-```csharp
-builder.UseVidra().UseVidraNativeUpdates();
-```
-
-That call has to be literally in `Main`: on install, update and uninstall
-Velopack re-launches the app with a `--veloapp-*` argument and expects it to do
-that work and exit without showing a window, and `vpk pack` inspects the
-assembly and warns when it finds the call anywhere else. Every scaffolded app
-already has the entry points, because entry-point shape is the one thing a
-package reference cannot retrofit.
-
-**4. Point it at a feed:**
-
-```json
-{
-  "vidra": {
-    "updates": {
-      "feedUrl": "https://updates.example.com/bundles.json",
-      "native": { "feedUrl": "https://updates.example.com/app/" }
-    }
-  }
-}
-```
-
-The two `feedUrl`s differ in kind: the OTA one names a *file*, the native one
-names the *directory* `vpk` writes into. They can be the same prefix,
-`releases.{channel}.json` and `bundles.json` never collide.
+Everything else is already in your app: the `Vidra.Updates.Native` reference,
+`.UseVidraNativeUpdates()` in `MauiProgram`, and `VelopackApp.Build()...Run()`
+at the top of both `Main`s. That last one has to be literally in `Main` — on
+install, update and uninstall Velopack re-launches the app with a `--veloapp-*`
+argument and expects it to do that work and exit without showing a window, and
+`vpk pack` inspects the assembly and warns when it finds the call anywhere else.
+It runs on every launch of every Vidra app and does nothing at all until the app
+is installed from a Velopack release.
 
 Then release:
 
 ```bash
 npm version patch
-npx vidra build --target windows --native-update
-npx vidra build --target macos   --native-update   # on a Mac
+npx vidra build --target windows
+npx vidra build --target macos     # on a Mac
 ```
 
 Each build downloads the live feed into `dist/release/` first and packs into it,
@@ -357,9 +347,12 @@ What comes out, beside the usual artifact:
 
 ### Things worth knowing before you ship one
 
-- **`vpk` refuses to re-publish a version.** Packing a version equal to or lower
-  than the newest in the feed fails and writes nothing. No overwrite, no second
-  package under one number. Bump the version.
+- **A version already in the feed is not re-published.** `vpk` refuses to pack
+  over one, and writes nothing at all — no overwrite, no second package under
+  one number. `vidra build` reports the skip and goes on to package what it just
+  built, so rebuilding at an unchanged version behaves like an ordinary build
+  and the artifact always contains the code from *this* publish. Bump the
+  version to release again.
 - **Every release keeps a full package in the feed**, not just a delta: older
   installs delta against them, so they cannot be pruned blindly.
 - **Velopack signs everything it packages**, including its own `Setup.exe` and
@@ -380,6 +373,19 @@ What comes out, beside the usual artifact:
 
 ## Reference
 
+### Commands
+
+| Command | Effect |
+|---|---|
+| `vidra updates` | which tiers are on, and the URLs that turned them on |
+| `vidra updates init --feed <url>` | web-bundle updates on |
+| `vidra updates init --feed <url> --native` | both, sharing one host |
+| `vidra updates init --native <url>` | whole-app updates on, alone or elsewhere |
+| `vidra updates init --keygen` | also generate a signing key and trust it |
+| `vidra updates init … --force` | move a feed that installed apps are already checking |
+
+### Environment
+
 | Variable | Effect |
 |---|---|
 | `VIDRA_UPDATE_FEED_URL` | Overrides the feed URL (or a local directory path) |
@@ -392,6 +398,25 @@ What comes out, beside the usual artifact:
 | `VIDRA_MACOS_KEYCHAIN` | A non-default keychain for `vpk` to sign from |
 
 `vidra dev` never checks for updates — it serves the Vite dev server.
+
+## Upgrading an app scaffolded before 0.5.0
+
+Older scaffolds shipped the updater commented out, and turning it on took five
+steps. Nothing about them stopped working — a `vidra.updates` block still turns
+on whatever that app has wired up — but four of the five are now in the
+template, and `npx vidra doctor` names any that yours is missing. To catch up,
+in your host project:
+
+1. add `<PackageReference Include="Vidra.Updates.Native" Version="0.5.0" />`
+2. add `.UseVidraUpdates().UseVidraNativeUpdates()` after `.UseVidra()`
+3. uncomment `VelopackApp.Build().UseVidraLocator().Run();` and its two `using`s
+   in `Platforms/MacCatalyst/Program.cs` and `Platforms/Windows/Program.cs`
+4. `rm -rf bin obj` in that project once — Mac Catalyst's incremental build
+   reuses AOT images compiled against the old dependency graph, and a package
+   reference changes it
+
+Then `vidra build` needs no `--native-update`: the flag is gone, and
+`vidra.updates.native.feedUrl` decides. Passing it says so and changes nothing.
 
 ## Upgrading an existing Windows app
 

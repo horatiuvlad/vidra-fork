@@ -39,14 +39,17 @@ export interface NativeUpdateSettings {
   packId: string;
   packTitle: string | null;
   packVersion: string;
-  feedUrl: string | null;
+  /** Never null: a feed URL is what turned this tier on in the first place. */
+  feedUrl: string;
   channel: string | null;
 }
 
-export class NativeUpdateConfigError extends Error {}
-
 /**
  * Settles what `vpk pack` is being asked to produce.
+ *
+ * Only ever called for a config `enabledTiers()` says has native updates on, so
+ * the feed URL is a given rather than a thing to check for: there is no
+ * half-configured state left where a release is packed that no app can find.
  *
  * The pack id is the app id the developer already chose: it names Velopack's
  * install directory (`%LOCALAPPDATA%\<packId>\`) and keys its feed, so deriving
@@ -54,44 +57,20 @@ export class NativeUpdateConfigError extends Error {}
  * one nobody would remember to keep in step.
  */
 export const resolveNativeUpdateSettings = (opts: {
-  config: NativeUpdateConfig | undefined;
+  config: NativeUpdateConfig & { feedUrl: string };
   csprojPath: string;
   projectName: string;
   version: string;
-}): NativeUpdateSettings => {
-  const config = opts.config ?? {};
-
-  if (config.enabled === false) {
-    throw new NativeUpdateConfigError(
-      'vidra.updates.native.enabled is false: remove --native-update, or set it to true',
-    );
-  }
-
-  const packId =
-    config.packId ?? readApplicationId(opts.csprojPath) ?? opts.projectName;
-
+}): NativeUpdateSettings => ({
+  packId: opts.config.packId ?? readApplicationId(opts.csprojPath) ?? opts.projectName,
   // Not cosmetic on macOS: `vpk pack` renames the bundle to
   // `<packTitle ?? packId>.app`, so without this the app a user drags to
   // /Applications is called `com.example.notes.app`.
-  const packTitle = readApplicationTitle(opts.csprojPath) ?? opts.projectName;
-
-  if (!config.feedUrl) {
-    // Not fatal on its own: a build can produce a release the developer uploads
-    // by hand. But the *app* cannot check a feed it was never told about, so a
-    // build that packs without one produces an installer that never updates,
-    // which is exactly the silent half-configured state `vidra doctor` exists
-    // to catch.
-    return { packId, packTitle, packVersion: opts.version, feedUrl: null, channel: config.channel ?? null };
-  }
-
-  return {
-    packId,
-    packTitle,
-    packVersion: opts.version,
-    feedUrl: config.feedUrl,
-    channel: config.channel ?? null,
-  };
-};
+  packTitle: readApplicationTitle(opts.csprojPath) ?? opts.projectName,
+  packVersion: opts.version,
+  feedUrl: opts.config.feedUrl,
+  channel: opts.config.channel ?? null,
+});
 
 /** `<ApplicationId>` out of the host csproj. */
 export const readApplicationId = (csprojPath: string): string | null =>
@@ -140,7 +119,18 @@ export interface NativeUpdateOutcome {
   releaseDir: string;
   outputs: VpkOutputs;
   /** What `vpk download` did, for reporting. */
-  merged: "merged" | "empty-feed" | "no-feed";
+  merged: "merged" | "empty-feed";
+  /**
+   * `already-released` when this version is in the feed already, which `vpk`
+   * refuses to overwrite (exit 255, nothing written).
+   *
+   * Not an error, because with a feed URL alone turning this tier on, rebuilding
+   * at an unchanged version is the ordinary inner loop rather than a mistake.
+   * The build simply stops publishing and goes back to packaging what it just
+   * built — the one thing it must never do is hand back the *previous* pack's
+   * archive as if it were this build's output.
+   */
+  status: "packed" | "already-released";
 }
 
 export class NativeUpdateError extends Error {
@@ -219,15 +209,23 @@ export const runNativeUpdate = (opts: {
 
   if (!result.ok) {
     if (result.alreadyReleased) {
-      throw new NativeUpdateError(
-        `${opts.settings.packVersion} is already in the feed, nothing was written`,
-        "bump the version in package.json (npm version patch), or drop --native-update to rebuild the installer only",
-      );
+      // `vpk` wrote nothing at all — no overwrite, no second package under one
+      // version, no damaged index. So the feed is exactly as it was, and the
+      // build carries on without it. The outputs are reported as absent rather
+      // than read off disk: whatever sits in the release directory belongs to
+      // the *previous* pack of this version, and handing that back would ship
+      // bits nobody just built.
+      return {
+        releaseDir,
+        outputs: { portableZip: null, setupExe: null, setupPkg: null },
+        merged,
+        status: "already-released",
+      };
     }
     throw new NativeUpdateError("vpk pack failed", result.output);
   }
 
-  return { releaseDir, outputs: findVpkOutputs(releaseDir), merged };
+  return { releaseDir, outputs: findVpkOutputs(releaseDir), merged, status: "packed" };
 };
 
 /**
@@ -241,8 +239,6 @@ const mergeFromLiveFeed = (
   releaseDir: string,
   io: NativeUpdateIo,
 ): NativeUpdateOutcome["merged"] => {
-  if (!settings.feedUrl) return "no-feed";
-
   const result = runVpk(
     vpk,
     downloadArgs({

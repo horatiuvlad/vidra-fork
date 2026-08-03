@@ -6,12 +6,21 @@ import fs from "fs-extra";
  * developer configures updates, next to the version the same file already owns.
  *
  * ```json
- * { "vidra": { "updates": { "feedUrl": "https://updates.example.com/bundles.json" } } }
+ * { "vidra": { "updates": {
+ *     "feedUrl": "https://updates.example.com/bundles.json",
+ *     "native": { "feedUrl": "https://updates.example.com/app/" }
+ * } } }
  * ```
  *
- * `vidra build` stamps it into the app bundle as `vidra-updates.json`, which the
- * host reads at startup. No block means no feed, which means the updater does
- * nothing at all.
+ * **A feed URL is the feature flag.** Every scaffolded app ships the whole
+ * updater — both tiers wired, Velopack referenced, the entry points live — and
+ * every part of it resolves to nothing until a URL says otherwise. There is no
+ * second switch to forget: `feedUrl` turns the web-bundle tier on, and
+ * `native.feedUrl` turns the whole-app tier on, at build time and at runtime
+ * alike.
+ *
+ * `vidra build` stamps this block into the app as `vidra-updates.json`, which
+ * the host reads at startup. Write it with `vidra updates init`.
  */
 /**
  * The `native` sub-block: Velopack's half of the same surface.
@@ -58,6 +67,55 @@ export interface UpdateConfig {
 
 /** The name the host looks for, as a MAUI app-package asset. */
 export const UPDATE_CONFIG_FILE = "vidra-updates.json";
+
+/** Which tiers a config turns on. Absent config means neither. */
+export interface UpdateTiers {
+  /** Web-bundle (OTA) updates: `vidra bundle` publishes them, the app checks. */
+  ota: boolean;
+  /** Whole-app updates: `vidra build` packs a release, the app checks. */
+  native: boolean;
+}
+
+/**
+ * The one rule the whole feature turns on: **a tier is on when it has a feed
+ * URL, and off when it does not.**
+ *
+ * `enabled: false` is the explicit off switch, kept beside the URL so a feed can
+ * be silenced for a release without losing it. Each tier owns its own — the
+ * top-level one sits beside the top-level `feedUrl` and means that feed, and
+ * `native.enabled` means the native one. Neither reaches across, because a
+ * switch that turns off something in another block is a switch people misread.
+ *
+ * The same rule runs on the other side, in C#: `VidraUpdateService` refuses to
+ * check without a feed, and `NativeUpdateConfig.Resolve` defaults `Enabled` to
+ * true so presence is all that is ever needed. This function exists so the CLI
+ * reaches the same verdict as the app, from the same fields.
+ */
+export const enabledTiers = (config: UpdateConfig | null): UpdateTiers => ({
+  ota: !!config?.feedUrl && config.enabled !== false,
+  native: !!config?.native?.feedUrl && config.native.enabled !== false,
+});
+
+/**
+ * Whether the app has a `vidra.updates` block at all, whatever is in it.
+ *
+ * Not the same question as {@link readUpdateConfig} returning something:
+ * `{ "feedURL": "…" }` is a block that parses to nothing usable, which is the
+ * exact shape a typo produces and is otherwise indistinguishable from an app
+ * that wants no updates. Somebody has to be able to tell those apart, and it is
+ * `vidra doctor` — the runtime deliberately cannot.
+ */
+export const hasUpdateBlock = (projectRoot: string): boolean => {
+  try {
+    const pkg = fs.readJsonSync(path.join(projectRoot, "package.json")) as {
+      vidra?: { updates?: unknown };
+    };
+    const updates = pkg?.vidra?.updates;
+    return !!updates && typeof updates === "object";
+  } catch {
+    return false;
+  }
+};
 
 export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {
   const pkgPath = path.join(projectRoot, "package.json");
@@ -147,4 +205,65 @@ export const stampUpdateConfig = (
   fs.ensureDirSync(path.dirname(target));
   fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
   return target;
+};
+
+/** What {@link writeUpdateConfig} may set. `null` removes a key. */
+export interface UpdateConfigPatch {
+  feedUrl?: string | null;
+  channel?: string | null;
+  publicKeys?: string[] | null;
+  native?: Partial<NativeUpdateConfig> | null;
+}
+
+/**
+ * Merges a patch into the app's `vidra.updates` block, in place.
+ *
+ * A merge rather than a write: `publicKeys` may already be there from
+ * `vidra keygen`, the native block may already have a `packId`, and a command
+ * that adds a feed URL must not quietly drop either. Keys set to `null` are
+ * removed, which is how a tier is turned back off.
+ *
+ * The file's own indentation and trailing newline are preserved, because this
+ * edits a file the developer owns and a diff full of reformatting is a diff
+ * nobody reads.
+ */
+export const writeUpdateConfig = (
+  projectRoot: string,
+  patch: UpdateConfigPatch,
+): UpdateConfig | null => {
+  const pkgPath = path.join(projectRoot, "package.json");
+  const source = fs.readFileSync(pkgPath, "utf-8");
+  const pkg = JSON.parse(source) as Record<string, unknown>;
+
+  const vidra = (pkg.vidra ??= {}) as Record<string, unknown>;
+  const updates = (vidra.updates ??= {}) as Record<string, unknown>;
+
+  const apply = (target: Record<string, unknown>, key: string, next: unknown): void => {
+    if (next === undefined) return;
+    if (next === null) delete target[key];
+    else target[key] = next;
+  };
+
+  apply(updates, "feedUrl", patch.feedUrl);
+  apply(updates, "channel", patch.channel);
+  apply(updates, "publicKeys", patch.publicKeys);
+
+  if (patch.native === null) {
+    delete updates.native;
+  } else if (patch.native) {
+    const native = (updates.native ??= {}) as Record<string, unknown>;
+    apply(native, "feedUrl", patch.native.feedUrl);
+    apply(native, "channel", patch.native.channel);
+    apply(native, "packId", patch.native.packId);
+  }
+
+  fs.writeFileSync(pkgPath, serializeLike(source, pkg));
+  return readUpdateConfig(projectRoot);
+};
+
+/** Re-serializes JSON with the indentation and final newline the file already had. */
+const serializeLike = (original: string, value: unknown): string => {
+  const indent = /^[ \t]+/m.exec(original.split("\n")[1] ?? "")?.[0] ?? "  ";
+  const json = JSON.stringify(value, null, indent);
+  return original.endsWith("\n") ? `${json}\n` : json;
 };

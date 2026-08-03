@@ -5,6 +5,7 @@ import { parseArgs } from "../utils.js";
 import { formatBuildError, formatProcessError } from "../exec.js";
 import { resolveAppVersion, versionPublishArgs } from "../version.js";
 import {
+  enabledTiers,
   readUpdateConfig,
   stampUpdateConfig,
   UPDATE_CONFIG_FILE,
@@ -12,7 +13,6 @@ import {
 } from "../update-config.js";
 import {
   extractPackedApp,
-  NativeUpdateConfigError,
   NativeUpdateError,
   RELEASE_DIR,
   resolveNativeUpdateSettings,
@@ -80,10 +80,6 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
   const verbose = !!args["verbose"];
   const plan = !!args["plan"] || !!args["dry-run"];
-  // Opt-in per build, configured in package.json. A flag rather than pure
-  // config because packing publishes a release into a feed: a side effect no
-  // build should acquire by someone adding a block to a file.
-  const nativeUpdate = !!args["native-update"];
   const targetName = (args["target"] as string) || detectPlatform();
 
   const target = TARGETS[targetName];
@@ -114,29 +110,36 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   // (alias `--dry-run`) opts into the preview.
   const updateConfig = readUpdateConfig(project.root);
 
-  // Fail before the five-minute publish, not after it: a native-update build
-  // with nothing configured cannot produce a feed, and finding that out at the
-  // pack step wastes the whole build.
-  let nativeSettings: NativeUpdateSettings | null = null;
-  if (nativeUpdate) {
-    try {
-      nativeSettings = resolveNativeUpdateSettings({
-        config: updateConfig?.native,
+  // The feed URL is the flag. `vidra.updates.native.feedUrl` is both what makes
+  // this build pack a release and what lets the installed app find it, so the
+  // two can no longer disagree — which is the whole reason there is no
+  // `--native-update` any more.
+  const nativeSettings: NativeUpdateSettings | null = enabledTiers(updateConfig).native
+    ? resolveNativeUpdateSettings({
+        config: updateConfig!.native as { feedUrl: string },
         csprojPath: project.csprojPath,
         projectName: project.projectName,
         version: project.displayVersion,
-      });
-    } catch (error) {
-      if (!(error instanceof NativeUpdateConfigError)) throw error;
-      console.error();
-      console.error(row({ glyph: "error", label: "native update", labelWidth: LABEL_WIDTH, detail: dim(error.message) }));
-      console.error();
-      process.exit(1);
-    }
+      })
+    : null;
+
+  if (args["native-update"]) {
+    console.log(
+      row({
+        glyph: "skip",
+        label: "native update",
+        labelWidth: LABEL_WIDTH,
+        detail: dim(
+          nativeSettings
+            ? "--native-update is no longer needed: vidra.updates.native.feedUrl already turns this on"
+            : "--native-update no longer does anything — set vidra.updates.native.feedUrl (npx vidra updates init --native <url>)",
+        ),
+      }),
+    );
   }
 
   if (plan) {
-    printBuildPlan(project, target, nativeSettings);
+    printBuildPlan(project, target, updateConfig, nativeSettings);
     console.log();
     console.log(
       footer(`${dim("nothing has run. re-run without")} ${lime("--plan")} ${dim("to apply.")}`),
@@ -204,17 +207,23 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   // the DMG wraps the packed `.app`, and the Windows ZIP is the one `vpk` wrote
   // rather than one we roll by hand. Both keep today's artifact name, so
   // nothing downstream of `vidra build` has to know which path ran.
+  //
+  // Unless this version is already published, in which case nothing was packed
+  // and the build falls back to packaging what it just built. That path is the
+  // ordinary one for a rebuild at an unchanged version, and it is the only
+  // honest answer: the artifact has to contain the code from *this* publish.
   const packed = nativeSettings
     ? stepNativeUpdate(project, target, bundlePath, entitlements, nativeSettings, io)
     : null;
+  const released = packed?.status === "packed" ? packed : null;
 
   const outputPath =
-    packed && target.name === "windows"
-      ? stepPublishVelopackWindowsArtifacts(project, target, packed)
+    released && target.name === "windows"
+      ? stepPublishVelopackWindowsArtifacts(project, target, released)
       : await stepPackage(
           project,
           target,
-          packed ? extractPackedApp(packed.outputs.portableZip!) : bundlePath,
+          released ? extractPackedApp(released.outputs.portableZip!) : bundlePath,
         );
 
   if (target.name === "macos") {
@@ -333,6 +342,7 @@ const reportGatekeeper = (artifactPath: string): void => {
 const printBuildPlan = (
   project: ProjectInfo,
   target: BuildTarget,
+  config: UpdateConfig | null,
   nativeSettings: NativeUpdateSettings | null,
 ): void => {
   console.log(
@@ -351,6 +361,24 @@ const printBuildPlan = (
       detail: `${dim("\u2192")} ${value("Resources/Raw/wwwroot")}`,
     }),
   );
+  if (config) {
+    // Which tiers this app has turned on, read off the same fields the build
+    // reads: the plan is where a misspelled key should become visible.
+    const tiers = enabledTiers(config);
+    const on = [tiers.ota ? "web bundle" : null, tiers.native ? "whole app" : null].filter(Boolean);
+    console.log(
+      row({
+        glyph: on.length > 0 ? "done" : "manual",
+        label: "stamp updates",
+        labelWidth: LABEL_WIDTH,
+        detail:
+          on.length > 0
+            ? `${dim("\u2192")} ${value(`Resources/Raw/${UPDATE_CONFIG_FILE}`)} ${dim(`(${on.join(" + ")})`)}`
+            : dim("a vidra.updates block with no feed URL turns nothing on"),
+      }),
+    );
+  }
+
   console.log(
     row({
       glyph: "done",
@@ -374,12 +402,10 @@ const printBuildPlan = (
     );
     console.log(
       row({
-        glyph: nativeSettings.feedUrl ? "active" : "manual",
+        glyph: "active",
         label: "merge feed",
         labelWidth: LABEL_WIDTH,
-        detail: nativeSettings.feedUrl
-          ? `${dim("vpk download \u2190")} ${value(nativeSettings.feedUrl)}`
-          : dim("no vidra.updates.native.feedUrl \u2014 the release is packed, and no app will find it"),
+        detail: `${dim("vpk download \u2190")} ${value(nativeSettings.feedUrl)}`,
       }),
     );
   }
@@ -543,18 +569,21 @@ const stepStampUpdateConfig = (project: ProjectInfo, config: UpdateConfig | null
   stampUpdateConfig(project.hostDir, config);
 
   if (!config) {
-    // Silent when there is nothing to say: most apps do not use OTA updates, and
-    // a build log should not imply a feature is missing.
+    // Silent when there is nothing to say: an app that configured no feed wants
+    // no updates, and a build log should not imply a feature is missing.
     return;
   }
 
+  const tiers = enabledTiers(config);
+  const on = [tiers.ota ? "web bundle" : null, tiers.native ? "whole app" : null].filter(Boolean);
+
   console.log(
     row({
-      glyph: "done",
+      glyph: on.length > 0 ? "done" : "manual",
       label: "stamp updates",
       labelWidth: LABEL_WIDTH,
       detail: `${dim("\u2192")} ${value(`Resources/Raw/${UPDATE_CONFIG_FILE}`)} ${dim(
-        config.enabled === false ? "(disabled)" : `(${config.feedUrl ?? "no feed"})`,
+        on.length > 0 ? `(${on.join(" + ")})` : "(no feed URL \u2014 nothing is checked)",
       )}`,
     }),
   );
@@ -666,17 +695,7 @@ const stepNativeUpdate = (
     process.exit(1);
   }
 
-  if (outcome.merged === "no-feed") {
-    // The build still produces a release; the app just has nowhere to look.
-    console.log(
-      row({
-        glyph: "manual",
-        label: "merge feed",
-        labelWidth: LABEL_WIDTH,
-        detail: dim("no vidra.updates.native.feedUrl: this release is packed but the app will never check for it"),
-      }),
-    );
-  } else if (outcome.merged === "empty-feed") {
+  if (outcome.merged === "empty-feed") {
     console.log(
       row({
         glyph: "manual",
@@ -697,6 +716,27 @@ const stepNativeUpdate = (
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+
+  if (outcome.status === "already-released") {
+    // Not a failure. `vpk` wrote nothing, the feed is untouched, and the build
+    // goes on to package what it just built — so a rebuild at an unchanged
+    // version behaves exactly like a build with no native updates at all.
+    console.log(
+      row({
+        glyph: "skip",
+        label: "vpk pack",
+        labelWidth: LABEL_WIDTH,
+        detail: dim(
+          `${settings.packVersion} is already in the feed — nothing was released, and the artifact is this build`,
+        ),
+      }),
+    );
+    console.log(
+      footer(dim(`bump the version to publish a new release: ${value("npm version patch")}`)),
+    );
+    return outcome;
+  }
+
   console.log(
     row({
       glyph: "done",

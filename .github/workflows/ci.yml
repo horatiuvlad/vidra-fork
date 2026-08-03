@@ -682,15 +682,17 @@ jobs:
 
       # ---- Native (whole-app) updates ----
       #
-      # The same scaffold again, this time shipping Velopack: two releases built
-      # by `vidra build --native-update`, the first one installed, and the second
-      # applied to it in place. Folded in from a throwaway probe rig, which
-      # proved the sequence against raw Velopack. What is under test
-      # here is Vidra's own glue: the entry points, the builder call, the config
-      # resolution, and (on macOS) the Catalyst locator Velopack does not ship.
+      # The same scaffold again: two releases built by `vidra build`, the first
+      # one installed, and the second applied to it in place. Folded in from a
+      # throwaway probe rig, which proved the sequence against raw Velopack.
+      # What is under test here is Vidra's own glue: the entry points, the
+      # builder call, the config resolution, and (on macOS) the Catalyst locator
+      # Velopack does not ship.
       #
-      # macOS is the leg that had never been proven: this is the first Catalyst
-      # app to complete a Velopack round-trip, and it is why the leg exists.
+      # The scaffold above already built and launched this same app with the
+      # updater live and *nothing* configured — which is the other half of the
+      # claim a feed URL is the only switch, and the only place `VelopackApp.Run()`
+      # is exercised in an app that was never packed.
       - name: Install vpk
         shell: bash
         run: |
@@ -707,6 +709,10 @@ jobs:
             echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
           fi
 
+      # One step, because there is one switch. Nothing about the app's own source
+      # changes here, which is also why the `rm -rf bin obj` this step used to
+      # need is gone: the dependency graph is the same before and after, so Mac
+      # Catalyst cannot reuse an AOT image compiled against a different one.
       - name: Configure the scaffolded app for native updates (1.0.0)
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
@@ -714,13 +720,6 @@ jobs:
           node "$GITHUB_WORKSPACE/tests/ci/native-update-setup.mjs" \
             --project "$PWD" --name VidraSmoke --version 1.0.0 \
             --main-page "$GITHUB_WORKSPACE/tests/smoke/native-update-main-page.cs.in"
-          # A new package reference changes the dependency graph, and Mac
-          # Catalyst's incremental build happily reuses AOT images compiled
-          # against the old one, producing an app that aborts at launch with
-          # "Failed to load AOT module ... because a dependency ... is out of date".
-          # This job is the only place a Vidra app ever acquires a reference
-          # mid-build; a developer adds one and builds, which is what this is.
-          rm -rf src/VidraSmoke.Host/bin src/VidraSmoke.Host/obj
 
       # The feed is not serving during the build, so `vpk download` finds
       # nothing and warns, which is exactly the first-release case.
@@ -730,7 +729,7 @@ jobs:
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
-            build --target ${{ matrix.target }} --native-update
+            build --target ${{ matrix.target }}
           ls -la dist dist/release
 
       # `vpk pack` overwrites the un-versioned artifacts in its output directory
@@ -763,27 +762,32 @@ jobs:
           node "$GITHUB_WORKSPACE/tests/ci/native-update-setup.mjs" \
             --project "$PWD" --name VidraSmoke --version 1.0.1
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
-            build --target ${{ matrix.target }} --native-update
+            build --target ${{ matrix.target }}
           ls -la dist/release
           cat dist/release/releases*.json
 
-      # The one question CI can answer about re-packing: `vpk pack` refuses a
-      # version already in the feed rather than overwriting it or emitting a
-      # second package under one version. Measured on Linux with vpk 1.2.0;
-      # asserted here on the platform that actually ships.
-      - name: Re-packing a published version is refused, not silently accepted
+      # Rebuilding at an unchanged version is the ordinary inner loop now that a
+      # config field, not a flag, decides whether a build packs — so it has to
+      # succeed, leave the feed exactly as it was, and still produce an artifact
+      # built from this publish rather than the previous pack's archive.
+      #
+      # `vpk pack` refuses a version already in the feed rather than overwriting
+      # it or emitting a second package under one version (measured on Linux with
+      # vpk 1.2.0); this asserts we turn that refusal into a skip.
+      - name: Rebuilding a published version skips the pack and leaves the feed alone
+        timeout-minutes: 25
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          set +e
-          output="$(node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
-            build --target ${{ matrix.target }} --native-update 2>&1)"
-          code=$?
-          set -e
-          echo "$output"
-          [ $code -ne 0 ] || { echo "::error::re-packing 1.0.1 should have failed"; exit 1; }
-          echo "$output" | grep -qi "already in the feed" || {
-            echo "::error::expected the 'already in the feed' message"; exit 1; }
+          before="$(ls dist/release | sort | tr '\n' ' ')"
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            build --target ${{ matrix.target }} 2>&1 | tee rebuild.log
+          grep -qi "already in the feed" rebuild.log || {
+            echo "::error::expected the 'already in the feed' skip"; exit 1; }
+          after="$(ls dist/release | sort | tr '\n' ' ')"
+          [ "$before" = "$after" ] || {
+            echo "::error::the release directory changed on a rebuild of a published version"
+            ls -la dist/release; exit 1; }
 
       - name: Install 1.0.0 with the generated Setup.exe (Windows)
         if: runner.os == 'Windows'

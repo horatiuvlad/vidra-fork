@@ -13,6 +13,14 @@ const CLI_ROOT = path.resolve(__dirname, "../..");
 const TEMPLATE_DIR = path.join(CLI_ROOT, "templates", "react-vite");
 const SHOULD_RUN_DOTNET = process.env.VIDRA_E2E_DOTNET === "1";
 
+/**
+ * The template explains itself, and those explanations name the very calls
+ * being asserted below — so a plain substring search would pass on a file where
+ * every one of them is commented out.
+ */
+const stripComments = (source: string): string =>
+  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
 describe("scaffold integration", () => {
   const projectDir = "my-vidra-test-app";
   const projectName = toPascalCase(projectDir);
@@ -125,6 +133,42 @@ describe("scaffold integration", () => {
     expect(content).toContain("<ApplicationDisplayVersion>");
     expect(content).toContain("<VidraTsOutputDir>");
     expect(content).not.toMatch(/\{\{.+?\}\}/);
+  });
+
+  /**
+   * The updater ships live in every scaffolded app, doing nothing until
+   * `package.json` names a feed. That is what makes a feed URL the only switch
+   * — so if any of these four ever regress to being commented out, an app that
+   * configures a feed goes quietly back to never updating, and nothing else in
+   * the suite would notice.
+   */
+  describe("the updater ships live", () => {
+    const host = (...rel: string[]): string =>
+      path.join(root, "src", `${projectName}.Host`, ...rel);
+
+    it("references Vidra.Updates.Native", async () => {
+      const csproj = await fs.readFile(host(`${projectName}.Host.csproj`), "utf8");
+      expect(csproj).toContain('<PackageReference Include="Vidra.Updates.Native"');
+    });
+
+    it("calls both builder extensions", async () => {
+      const live = stripComments(await fs.readFile(host("MauiProgram.cs"), "utf8"));
+      expect(live).toContain(".UseVidraUpdates()");
+      expect(live).toContain(".UseVidraNativeUpdates()");
+    });
+
+    it.each(["MacCatalyst", "Windows"])(
+      "runs VelopackApp before the UI framework on %s",
+      async (platform) => {
+        const live = stripComments(await fs.readFile(host("Platforms", platform, "Program.cs"), "utf8"));
+        expect(live).toContain("VelopackApp.Build().UseVidraLocator().Run();");
+      },
+    );
+
+    it("ships no update configuration, so a fresh app checks nothing", async () => {
+      const pkg = await fs.readJson(path.join(root, "package.json"));
+      expect(pkg.vidra?.updates).toBeUndefined();
+    });
   });
 
   it("keeps the capabilities client and result type imported", async () => {

@@ -82,7 +82,14 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
                 _store.Prune(_state);
             }
 
-            Log($"{transition.Reason}");
+            // Silent when nothing has ever been installed. Every Vidra app runs
+            // this — the template wires updates up whether or not the app has a
+            // feed — so an app that only ever serves its embedded bundle must
+            // not narrate that on every launch. Anything that actually happened,
+            // and any launch where a downloaded bundle is serving, still says so.
+            if (transition.Outcome != StartupOutcome.Unchanged || dropped.Count > 0 || _state.Current is not null)
+                Log($"{transition.Reason}");
+
             WebAssetRoot.UseResolver(() => _store.ResolveAssetRoot(_state));
         }
         catch (Exception ex)

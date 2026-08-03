@@ -5,7 +5,6 @@ import path from "node:path";
 
 import {
   entitlementsCopyName,
-  NativeUpdateConfigError,
   readApplicationId,
   resolveNativeUpdateSettings,
   windowsSignParams,
@@ -76,17 +75,12 @@ describe("resolveNativeUpdateSettings", () => {
   });
 
   /**
-   * Not fatal: a release can be packed and uploaded by hand. But the installed
-   * app has nowhere to look, which is a half-configured state worth surfacing
-   * rather than a build to refuse.
+   * The feed URL is what turned this tier on, so it is a given by the time
+   * anything is resolved: there is no half-configured state left where a
+   * release is packed that no installed app can find.
    */
-  it("allows a missing feed URL and reports it as missing", () => {
-    expect(resolve({}).feedUrl).toBeNull();
-    expect(resolve(undefined).feedUrl).toBeNull();
-  });
-
-  it("refuses to pack when the config says native updates are off", () => {
-    expect(() => resolve({ feedUrl: "https://cdn/", enabled: false })).toThrow(NativeUpdateConfigError);
+  it("carries the feed URL that turned native updates on", () => {
+    expect(resolve({ feedUrl: "https://cdn/" }).feedUrl).toBe("https://cdn/");
   });
 
   it("leaves the channel unset so vpk uses win/osx", () => {

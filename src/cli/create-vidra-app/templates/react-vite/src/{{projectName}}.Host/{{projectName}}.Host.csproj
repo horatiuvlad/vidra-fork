@@ -62,9 +62,9 @@
       argument and expects it to do that work and exit without ever showing a
       window, and `vpk pack` inspects the assembly and warns when it finds the
       call outside the entry point. Entry-point shape is the one thing a package
-      reference cannot retrofit, so every Vidra app ships with it and the
-      Velopack line stays commented out until the app opts in. Mac Catalyst
-      already has a real `Main`, so it needs no equivalent switch.
+      reference cannot retrofit, so every Vidra app ships with it, live, from the
+      first scaffold. Mac Catalyst already has a real `Main`, so it needs no
+      equivalent switch.
     -->
     <DefineConstants Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
 
@@ -90,6 +90,14 @@
     <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="9.0.0" />
     <PackageReference Include="Vidra.Hosting.Maui" Version="{{vidraVersion}}" />
+    <!--
+      Whole-app updates, via Velopack. Referenced from the first scaffold and
+      inert until package.json names a native feed: ~280 KB of managed code
+      against a self-contained .NET + MAUI app, which is the price of never
+      having to retrofit an entry point, a package reference and a builder call
+      into an app that has already shipped.
+    -->
+    <PackageReference Include="Vidra.Updates.Native" Version="{{vidraVersion}}" />
   </ItemGroup>
 
 </Project>
