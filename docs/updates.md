@@ -490,7 +490,7 @@ What comes out, beside the usual artifact:
 
 `vidra dev` never checks for updates — it serves the Vite dev server.
 
-## Upgrading an app scaffolded before 0.6.0
+## Upgrading an existing app
 
 Two things changed, and `npx vidra doctor` names whichever applies to you.
 
@@ -514,8 +514,9 @@ landing somewhere the app is not reading.
 Feed payloads also moved from `dist/` and `dist/release/` into `dist/feed/`, so
 any upload script pointing at the old paths needs one edit.
 
-Apps scaffolded before **0.5.0** additionally need the updater itself, since it
-used to be commented out: add the `Vidra.Updates.Native` package reference, call
+An app scaffolded before the updater shipped live additionally needs the updater
+itself, since it used to be commented out: add the `Vidra.Updates.Native`
+package reference, call
 `.UseVidraUpdates().UseVidraNativeUpdates()` after `.UseVidra()`, uncomment
 `VelopackApp.Build().UseVidraLocator().Run();` and its two `using`s in both
 `Platforms/*/Program.cs`, then `rm -rf bin obj` in that project once.

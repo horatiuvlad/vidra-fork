@@ -291,9 +291,9 @@ describe("diagnoseUpdateConfiguration", () => {
   });
 
   /**
-   * Everything below is an app scaffolded before 0.5.0, where turning updates
-   * on took five steps and one of them was skipped. New apps cannot reach these
-   * states: the template ships all of it, live.
+   * Everything below is an app scaffolded before the updater shipped live, when
+   * turning updates on took five steps and one of them was skipped. New apps
+   * cannot reach these states: the template ships all of it, live.
    */
   it("catches a feed configured with no builder call", () => {
     expect(
