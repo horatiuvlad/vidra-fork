@@ -591,12 +591,19 @@ jobs:
       # "Verify a distributable artifact was produced" step above, which asserts
       # exactly one artifact of the expected type. Making the upload strict too
       # would bury an earlier real failure under a second, confusing one.
+      #
+      # Named globs rather than `dist/*`: a feed directory lives under `dist/`
+      # now, and it holds a 94 MB package the native-update proofs already
+      # upload the interesting parts of.
       - name: Upload packaged installer
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: vidra-installer-${{ matrix.os }}
-          path: ${{ runner.temp }}/vidra-smoke/dist/*
+          path: |
+            ${{ runner.temp }}/vidra-smoke/dist/*.dmg
+            ${{ runner.temp }}/vidra-smoke/dist/*.exe
+            ${{ runner.temp }}/vidra-smoke/dist/*.zip
           if-no-files-found: ignore
 
       # ---- Over-the-air bundle updates ----
@@ -639,12 +646,17 @@ jobs:
             "$GITHUB_WORKSPACE/tests/smoke/ota-main-page.cs.in" \
             > src/VidraSmoke.Host/MainPage.cs
 
+      # `--app`, not a full build: this step wants the binary with the feed URL
+      # stamped into it, and the e2e below publishes the bundle itself once its
+      # server is up. A full build would try to merge from a feed nothing is
+      # serving yet, and merging fails closed on purpose — a failed fetch must
+      # never publish an index that drops every existing entry.
       - name: Rebuild the app with updates enabled
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
-            build --target ${{ matrix.target }}
+            build --app --target ${{ matrix.target }}
 
       - name: Locate the update-enabled app (macOS)
         if: runner.os == 'macOS'
@@ -862,22 +874,4 @@ jobs:
             ${{ runner.temp }}/vidra-smoke/dist/feed/RELEASES*
             ${{ runner.temp }}/vidra-smoke/dist/feed/*delta.nupkg
           if-no-files-found: ignore
-
-      # Uploaded even on failure, since a broken installer is worth inspecting.
-      # Staying lenient here is deliberate: the strict gate is the
-      # "Verify a distributable artifact was produced" step above, which asserts
-      # exactly one artifact of the expected type. Making the upload strict too
-      # would bury an earlier real failure under a second, confusing one.
-      #
-      # Named globs rather than `dist/*`: the feed directory now lives under
-      # `dist/` too, and it holds a 94 MB package that is already uploaded above.
-      - name: Upload packaged installer
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: vidra-installer-${{ matrix.os }}
-          path: |
-            ${{ runner.temp }}/vidra-smoke/dist/*.dmg
-            ${{ runner.temp }}/vidra-smoke/dist/*.exe
-            ${{ runner.temp }}/vidra-smoke/dist/*.zip
           if-no-files-found: ignore

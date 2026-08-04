@@ -119,6 +119,13 @@ npx vidra build --app    # the installer and its release, no web bundle
 which is the entire point of that tier. `--app` is what a per-platform release
 job runs, so a platform-agnostic bundle is not republished from two runners.
 
+`--app` is also the answer when your feed is temporarily unreachable. Publishing
+merges from the live index and **fails closed** if it cannot read it, because a
+network blip that quietly published an index containing only your newest entry
+would strand every install that can only run an older one. The deliverable is
+produced before that step, so it exists either way, but the command exits
+non-zero. `--app` skips the publish entirely.
+
 ### Channels
 
 A channel is a **path**, not a label, and it comes from the build rather than
