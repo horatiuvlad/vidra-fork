@@ -863,7 +863,7 @@ jobs:
           # 1.2 KB. The delta comes along because Windows is the leg
           # that applies it (`feed 200 com.vidra.smoke-1.0.1-delta.nupkg`, 255
           # KB against a 94 MB full package), and it is the one feed file the
-          # `ls -la dist/release` above cannot show you the inside of. Catalyst
+          # `ls -la dist/feed` above cannot show you the inside of. Catalyst
           # applies the full package instead, so on macOS the delta is evidence
           # about what the feed published rather than about the bytes that were
           # applied. The full packages stay out at 32-94 MB each; their sizes
@@ -873,5 +873,4 @@ jobs:
             ${{ runner.temp }}/vidra-smoke/dist/feed/*.json
             ${{ runner.temp }}/vidra-smoke/dist/feed/RELEASES*
             ${{ runner.temp }}/vidra-smoke/dist/feed/*delta.nupkg
-          if-no-files-found: ignore
           if-no-files-found: ignore
