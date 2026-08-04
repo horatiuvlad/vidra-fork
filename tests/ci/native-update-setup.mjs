@@ -30,7 +30,9 @@ edit(path.join(projectDir, "package.json"), (json) => {
   const pkg = JSON.parse(json);
   pkg.version = version;
   pkg.vidra ??= {};
-  pkg.vidra.updates = { ...(pkg.vidra.updates ?? {}), native: { feedUrl } };
+  // `feed.app` rather than a bare feed string: this rig tests whole-app updates,
+  // and one string would turn the web tier on too.
+  pkg.vidra.updates = { ...(pkg.vidra.updates ?? {}), feed: { app: feedUrl } };
   return `${JSON.stringify(pkg, null, 2)}\n`;
 });
 

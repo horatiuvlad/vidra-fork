@@ -112,6 +112,23 @@ export const resolveChannel = (
   return trimmed ? trimmed : null;
 };
 
+/** Exits with a usage error rather than returning null, so callers get a target. */
+const resolveTarget = (flag: unknown): BuildTarget => {
+  const name = (typeof flag === "string" ? flag : "") || detectPlatform();
+  const target = TARGETS[name];
+  if (target) return target;
+
+  console.error();
+  console.error(
+    row({
+      glyph: "error",
+      detail: dim(`unsupported target: ${name} \u2014 supported: ${Object.keys(TARGETS).join(", ")}`),
+    }),
+  );
+  console.error();
+  return process.exit(1);
+};
+
 export const buildCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
   if (rejectUnknownFlags(BUILD, args)) return process.exit(1);
@@ -120,6 +137,10 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   const plan = !!args["plan"] || !!args["dry-run"];
   const mode = parseBuildMode(args);
   const channel = resolveChannel(args["channel"]);
+
+  // Before anything looks for a project: an unsupported target is a usage
+  // error, and has to say so from any directory. `--web` needs no target at all.
+  const target = mode === "web" ? null : resolveTarget(args["target"]);
 
   const project = detectProject(process.cwd());
   const updateConfig = readUpdateConfig(project.root);
@@ -184,29 +205,18 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
     return;
   }
 
-  const targetName = (args["target"] as string) || detectPlatform();
-  const target = TARGETS[targetName];
-  if (!target) {
-    const supported = Object.keys(TARGETS).join(", ");
-    console.error();
-    console.error(
-      row({
-        glyph: "error",
-        detail: dim(`unsupported target: ${targetName} \u2014 supported: ${supported}`),
-      }),
-    );
-    process.exit(1);
-  }
+  // Past the `--web` early return, so there is always a target.
+  const appTarget = target!;
 
   console.log();
   console.log(
     header(
       "build",
-      `${target.name} \u00b7 Release${channel ? ` \u00b7 ${channel}` : ""}${plan ? " \u00b7 plan" : ""}`,
+      `${appTarget.name} \u00b7 Release${channel ? ` \u00b7 ${channel}` : ""}${plan ? " \u00b7 plan" : ""}`,
     ),
   );
   console.log(kv("project", project.projectName));
-  console.log(kv("target", target.framework));
+  console.log(kv("target", appTarget.framework));
   console.log();
 
   const nativeSettings: NativeUpdateSettings | null =
@@ -220,11 +230,37 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
         })
       : null;
 
+  // Fail before the five-minute publish, not at the pack step after it. And say
+  // *why* whole-app updates are on: someone who wanted web bundles, typed one
+  // feed URL and got told to install a tool they have never heard of deserves
+  // the sentence that connects the two.
+  if (nativeSettings && !resolveVpk()) {
+    console.error();
+    console.error(
+      row({
+        glyph: "error",
+        label: "vpk",
+        labelWidth: LABEL_WIDTH,
+        detail: dim("not installed, and whole-app updates are on because vidra.updates.feed is set"),
+      }),
+    );
+    console.error(footer(dim(`install it:  ${value("dotnet tool install -g vpk")}`)));
+    console.error(
+      footer(
+        dim(
+          `or publish web bundles only:  ${value('"feed": { "web": "<url>" }')}`,
+        ),
+      ),
+    );
+    console.error();
+    return process.exit(1);
+  }
+
   // The plan view prints every step and artifact name without running anything
   // \u2014 the dim footer says how to commit. `--execute` is the default; `--plan`
   // (alias `--dry-run`) opts into the preview.
   if (plan) {
-    printBuildPlan(project, target, layout, feeds, nativeSettings, mode);
+    printBuildPlan(project, appTarget, layout, feeds, nativeSettings, mode);
     console.log();
     console.log(
       footer(`${dim("nothing has run. re-run without")} ${lime("--plan")} ${dim("to apply.")}`),
@@ -241,9 +277,9 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   stepBuildUi(project, verbose);
   stepCopyAssets(project);
   stepStampUpdateConfig(project, updateConfig, feeds, layout);
-  const publishDir = stepDotnetPublish(project, target, verbose);
+  const publishDir = stepDotnetPublish(project, appTarget, verbose);
 
-  const bundlePath = target.findBundle(publishDir, project.projectName);
+  const bundlePath = appTarget.findBundle(publishDir, project.projectName);
   if (!bundlePath) {
     console.error(
       row({
@@ -255,9 +291,9 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   }
 
   const io = { verbose, log: console.log, warn: console.warn };
-  const entitlements = target.name === "macos" ? entitlementsPath(project) : null;
+  const entitlements = appTarget.name === "macos" ? entitlementsPath(project) : null;
 
-  if (target.name === "macos") {
+  if (appTarget.name === "macos") {
     signMacAppBundleIfPossible(bundlePath, {
       ...io,
       purpose: "distribution",
@@ -269,7 +305,7 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   // Windows binaries must be signed *before* zipping \u2014 the signature travels
   // inside the archive, and a zip itself can't carry one.
   let signedWindowsExe: string | null = null;
-  if (target.name === "windows") {
+  if (appTarget.name === "windows") {
     signedWindowsExe = findPrimaryExecutable(bundlePath, project.projectName);
     if (signedWindowsExe && signWindowsBinariesIfPossible([signedWindowsExe], io)) {
       const verified = verifyWindowsSignature(signedWindowsExe);
@@ -298,21 +334,21 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   // ordinary one for a rebuild at an unchanged version, and it is the only
   // honest answer: the artifact has to contain the code from *this* publish.
   const packed = nativeSettings
-    ? stepNativeUpdate(project, target, bundlePath, entitlements, nativeSettings, io)
+    ? stepNativeUpdate(project, appTarget, bundlePath, entitlements, nativeSettings, io)
     : null;
   const released = packed?.status === "packed" ? packed : null;
 
   const outputPath =
-    released && target.name === "windows"
-      ? stepPublishVelopackWindowsArtifacts(project, layout, target, released)
+    released && appTarget.name === "windows"
+      ? stepPublishVelopackWindowsArtifacts(project, layout, appTarget, released)
       : await stepPackage(
           project,
           layout,
-          target,
+          appTarget,
           released ? extractPackedApp(released.outputs.portableZip!) : bundlePath,
         );
 
-  if (target.name === "macos") {
+  if (appTarget.name === "macos") {
     signMacDmgIfPossible(outputPath, io);
     const notarized = notarizeAndStaple(outputPath, io);
     if (notarized.status === "skipped") {

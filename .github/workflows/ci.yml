@@ -629,7 +629,10 @@ jobs:
             }
             const publicKey = fs.readFileSync('ota-signing-key.pem.pub', 'utf8').trim();
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.vidra = { updates: { feed: 'http://127.0.0.1:8099/', publicKeys: [publicKey] } };
+            // feed.web rather than a bare feed string: this app is testing web
+            // bundles, and one string turns on *both* tiers, which would demand
+            // vpk from a job that has not installed it yet.
+            pkg.vidra = { updates: { feed: { web: 'http://127.0.0.1:8099/' }, publicKeys: [publicKey] } };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           sed 's/__PROJECT_NAMESPACE__/VidraSmoke/' \
