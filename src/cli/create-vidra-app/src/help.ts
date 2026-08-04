@@ -123,7 +123,7 @@ export const rejectUnknownFlags = (spec: CommandSpec, args: ParsedArgs): boolean
       row({
         glyph: "error",
         detail: dim(
-          `unknown option --${flag}${suggestion ? ` — did you mean ${value(suggestion)}?` : ""}`,
+          `unknown option --${flag}${suggestion ? `: did you mean ${value(suggestion)}?` : ""}`,
         ),
       }),
     );
