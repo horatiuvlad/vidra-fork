@@ -12,12 +12,14 @@ import { resolveNotaryCredentials } from "./notarize.js";
 import { resolveWindowsSigningConfig } from "./windows-signing.js";
 import { resolveVpk, vpkVersion } from "./velopack.js";
 import {
-  enabledTiers,
   readUpdateBlockState,
   readUpdateConfig,
+  resolveFeeds,
+  type ResolvedFeeds,
   type UpdateBlockState,
   type UpdateConfig,
 } from "./update-config.js";
+import { FeedUriError } from "./feed-uri.js";
 import { tryDetectProject } from "./project.js";
 
 const DOTNET = process.platform === "win32" ? "dotnet.exe" : "dotnet";
@@ -546,7 +548,7 @@ export const diagnoseUpdateConfiguration = (input: {
    * What state the raw `vidra.updates` block is in. Every scaffolded app has
    * one, blank, so its mere presence says nothing — but a block somebody has
    * typed into that still turns nothing on is a mistake, and a block that
-   * parses to nothing (`feedURL` for `feedUrl`) leaves `config` null. Telling
+   * parses to nothing (`feedUrl` for `feed`) leaves `config` null. Telling
    * those apart is the whole reason this is passed separately.
    */
   blockState: UpdateBlockState;
@@ -554,7 +556,7 @@ export const diagnoseUpdateConfiguration = (input: {
   mauiProgram: string | null;
   /** Source of the host `.csproj`, or null when it could not be read. */
   csproj: string | null;
-  /** Sources of `Platforms/*&#47;Program.cs` that exist, keyed by platform. */
+  /** Sources of the per-platform `Program.cs` files that exist. */
   entryPoints: Record<string, string>;
   /** True when a `bundles.json` has been published but no `.sig` sits beside it. */
   publishedUnsigned: boolean;
@@ -564,34 +566,37 @@ export const diagnoseUpdateConfiguration = (input: {
   // about updates, and saying so back on every `doctor` run is noise.
   if (input.blockState !== "edited") return [];
 
-  const tiers = enabledTiers(config);
+  let feeds: ResolvedFeeds;
+  try {
+    feeds = resolveFeeds(config);
+  } catch (error) {
+    if (!(error instanceof FeedUriError)) throw error;
+    return [
+      {
+        name: "Update feed",
+        status: "missing",
+        detail: error.message,
+        fix: "npx vidra updates init --feed <url>",
+      },
+    ];
+  }
+
   const found: Requirement[] = [];
 
   // A block that exists and turns nothing on is almost always a typo — and it
-  // is the one mistake nothing else can catch, because a misspelled `feedUrl`
+  // is the one mistake nothing else can catch, because a misspelled `feed`
   // reads exactly like an app that wants no updates.
-  if (!tiers.ota && !tiers.native) {
+  if (!feeds.web && !feeds.app) {
     found.push({
       name: "Update feed",
       status: "missing",
       detail:
-        config?.enabled === false || config?.native?.enabled === false
+        config?.enabled === false
           ? "vidra.updates is switched off with enabled: false — nothing is checked"
-          : "vidra.updates has no feedUrl, so nothing is ever checked (a misspelled key looks exactly like this)",
+          : "vidra.updates has no feed URL, so nothing is ever checked (a misspelled key looks exactly like this)",
       fix: "npx vidra updates init --feed <url>",
     });
     return found;
-  }
-
-  // A native block with a channel or a packId but no URL: the release packs, and
-  // no installed app has anywhere to look for it.
-  if (config?.native && !config.native.feedUrl && config.native.enabled !== false) {
-    found.push({
-      name: "Native feed",
-      status: "missing",
-      detail: "vidra.updates.native has no feedUrl, so whole-app updates stay off",
-      fix: "npx vidra updates init --native <url>",
-    });
   }
 
   // Comments first. The scaffolded sources explain themselves, and those
@@ -599,7 +604,7 @@ export const diagnoseUpdateConfiguration = (input: {
   // search reports every app as already wired up.
   const mauiProgram = input.mauiProgram === null ? null : stripComments(input.mauiProgram);
 
-  if (tiers.ota && mauiProgram !== null && !mauiProgram.includes(".UseVidraUpdates(")) {
+  if (feeds.web && mauiProgram !== null && !mauiProgram.includes(".UseVidraUpdates(")) {
     found.push({
       name: "OTA updates wired up",
       status: "missing",
@@ -608,12 +613,12 @@ export const diagnoseUpdateConfiguration = (input: {
     });
   }
 
-  if (tiers.native) {
+  if (feeds.app) {
     if (mauiProgram !== null && !mauiProgram.includes(".UseVidraNativeUpdates(")) {
       found.push({
         name: "Native updates wired up",
         status: "missing",
-        detail: "a native feed is configured, but MauiProgram never calls .UseVidraNativeUpdates()",
+        detail: "a feed is configured, but MauiProgram never calls .UseVidraNativeUpdates()",
         fix: "add .UseVidraNativeUpdates() after .UseVidra() in MauiProgram.cs",
       });
     }
@@ -646,7 +651,7 @@ export const diagnoseUpdateConfiguration = (input: {
       name: "Feed signature",
       status: "missing",
       detail: "publicKeys are configured, so signatures are mandatory, but the published bundles.json has no .sig beside it",
-      fix: "republish with `vidra bundle --sign <key.pem>`",
+      fix: "republish with `vidra build --web --sign <key.pem>`",
     });
   }
 
@@ -660,6 +665,27 @@ export const diagnoseUpdateConfiguration = (input: {
  */
 const stripComments = (source: string): string =>
   source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+/**
+ * Every `bundles.json` this project has published locally.
+ *
+ * Shallow on purpose: a feed directory sits one or two levels under `dist/`
+ * depending on whether the build used a channel, and looking further would
+ * start reporting on directories that are not feeds.
+ */
+const publishedFeeds = (projectRoot: string): string[] => {
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 2 || !fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, depth + 1);
+      else if (entry.name === "bundles.json") found.push(full);
+    }
+  };
+  walk(path.join(projectRoot, "dist"), 0);
+  return found;
+};
 
 /** Reads what {@link diagnoseUpdateConfiguration} needs off disk. */
 const inspectUpdateConfiguration = (): Requirement[] => {
@@ -680,9 +706,17 @@ const inspectUpdateConfiguration = (): Requirement[] => {
     if (source !== null) entryPoints[platform] = source;
   }
 
-  const bundles = path.join(project.root, "dist", "bundles.json");
-  const publishedUnsigned = fs.existsSync(bundles) && !fs.existsSync(`${bundles}.sig`);
-  const nativeWanted = enabledTiers(config).native;
+  const publishedUnsigned = publishedFeeds(project.root).some(
+    (index) => !fs.existsSync(`${index}.sig`),
+  );
+
+  let nativeWanted = false;
+  try {
+    nativeWanted = !!resolveFeeds(config).app;
+  } catch {
+    // A feed we cannot resolve is diagnosed below; it does not decide whether
+    // `vpk` is required.
+  }
 
   return [
     ...(nativeWanted || resolveVpk() ? [checkVelopack(nativeWanted)] : []),

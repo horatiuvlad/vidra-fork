@@ -4,8 +4,11 @@ Vidra apps update in two tiers. Use either, both, or neither.
 
 | | ships | mechanism | turned on by |
 |---|---|---|---|
-| **Web bundle** | your `ui/` build | a new bundle, applied on the next launch | `vidra.updates.feedUrl` |
-| **[Whole app](#whole-app-updates)** | the app, native code included | Velopack replaces the install in place | `vidra.updates.native.feedUrl` |
+| **Web bundle** | your `ui/` build | a new bundle, applied on the next launch | `vidra build --web` |
+| **[Whole app](#whole-app-updates)** | the app, native code included | Velopack replaces the install in place | `vidra build --app` |
+
+Both are turned on by one field, `vidra.updates.feed`, and the flags above only
+narrow what a given build publishes.
 
 Most of this document is about the first. It is the one you reach for weekly: a
 bundle is small, needs no installer, and can never get ahead of the binary —
@@ -14,71 +17,137 @@ second is for the releases that change C#.
 
 ## Turning them on
 
-**A feed URL is the only switch**, and it is already in your `package.json`,
-empty:
+**A feed URL is the only switch**, and it is already in your `package.json`, empty:
 
 ```json
-{
-  "vidra": {
-    "updates": {
-      "feedUrl": "",
-      "native": { "feedUrl": "" }
-    }
-  }
-}
+{ "vidra": { "updates": { "feed": "" } } }
 ```
 
-Fill either one in and that tier starts checking. Nothing else: every scaffolded
-app already ships the whole updater — both tiers wired into `MauiProgram`,
-`Vidra.Updates.Native` referenced, `VelopackApp.Build()...Run()` live in both
-entry points — and every part of it resolves to nothing until one of those URLs
-does not.
+Fill it in and both tiers start:
 
-There is a command, for scripts and for deriving one URL from the other:
+```json
+{ "vidra": { "updates": { "feed": "https://updates.acme.com/notes/" } } }
+```
+
+That is a **directory**. The web tier reads `bundles.json` inside it; whole-app
+releases use it as-is. The two indexes never collide, which is why one URL can
+serve both.
+
+Nothing else: every scaffolded app already ships the whole updater. Both tiers
+are wired into `MauiProgram`, `Vidra.Updates.Native` is referenced, and
+`VelopackApp.Build()...Run()` is live in both entry points, all of it resolving
+to nothing until that URL does not.
+
+There is a command, for scripts and for wiring a signing key in one step:
 
 ```bash
-npx vidra updates init --feed https://updates.example.com/app/bundles.json --native
+npx vidra updates init --feed https://updates.acme.com/notes/ --keygen
+npx vidra updates                                    # which tiers are on
 ```
 
-`--native` with no value puts the app releases in the same directory the
-bundles.json lives in; `--native <url>` puts them somewhere else; drop it for
-web-bundle updates only. `npx vidra updates` shows which tiers are on.
+### Splitting the two tiers
 
-`vidra build` stamps the block into the app, so the feed URL lives next to the
-version in the file that already owns it. Optional keys: `channel` (only entries
-labelled with the same one are considered) and `enabled: false` (a kill switch,
-per tier, that keeps the URL and still lets an already-downloaded bundle finish
-promoting).
+When the app packages want their own bucket:
 
-> **Why it ships live rather than opt-in.** Two of the four pieces — the entry
-> point that runs before the UI framework, and the package reference that
-> changes the dependency graph — cannot be retrofitted by configuration, and
-> asking an app that has already shipped to take over its own `Main` is a
-> migration nobody wants. Carrying them from the first scaffold costs ~280 KB of
-> managed code in a self-contained .NET + MAUI app, and buys a feature that
-> turns on with a URL. An app that never configures one checks nothing, writes
-> nothing, and logs nothing.
+```json
+{ "vidra": { "updates": { "feed": {
+    "web": "https://cdn.acme.com/notes/",
+    "app": "https://downloads.acme.com/notes/"
+} } } }
+```
+
+Either half may be empty, which turns that tier off while keeping the shape.
+
+### Shorthands
+
+`feed` accepts three forms, and every one resolves to a public HTTPS location:
+
+| written | resolves to |
+|---|---|
+| `https://updates.acme.com/notes/` | itself |
+| `github:acme/notes` | `https://github.com/acme/notes/releases/download/updates/` |
+| `./dist/feed` or `/srv/feed` | a local directory, for testing |
+
+`github:acme/notes@tag` names the release yourself. The default tag is
+`updates`: one pinned release holds the indexes and payloads, while per-version
+release pages stay for humans with the installers attached. GitHub's
+`releases/latest/download/` alias is deliberately **not** supported, because
+older archives live under their own tags and it would 404 for whoever is
+furthest behind.
+
+There is no `s3:`. A bucket's public URL is only derivable for AWS at its
+default endpoint, so anyone behind CloudFront, R2 or a custom domain would have
+a guess baked into every install. Write the `https://` you actually serve.
+
+> **The resolved URL is stamped into every build and lives in every install
+> forever.** That makes these rules permanent: adding a shorthand is cheap,
+> changing one is not.
 
 ## Publishing
 
 ```bash
-npm version patch          # bundles are ordered by your app's version
-npx vidra bundle --merge-from https://updates.example.com/bundles.json
+npm version patch      # bundles and releases are ordered by your app's version
+npx vidra build        # everything this app is configured for
 ```
 
-That builds `ui/`, writes `dist/bundle-<version>-<hash>.zip`, and produces a
-`dist/bundles.json` containing your new entry **plus everything already
-published**. Then upload — see the recipes below.
+What lands, and where:
 
-`vidra bundle` writes both **contract fingerprints** into each entry, read from
-generated files rather than configured. That matters — see below.
+```
+dist/
+├── Notes-1.3.0-macos.dmg          what people download
+├── Notes-1.3.0-Setup.exe
+└── feed/                          what you upload
+    ├── bundles.json + .sig
+    ├── bundle-1.3.0-4f9a2c81.zip
+    ├── releases.osx.json
+    └── Notes-1.3.0-full.nupkg
+```
 
-### Always merge into the live index
+**One rule: `dist/` is yours, `dist/feed/` is the server's.** A feed directory
+mirrors exactly one remote prefix, so uploading is "sync this directory to the
+URL it mirrors" rather than a rule about which files to include. Split feeds
+produce `feed-web/` and `feed-app/` instead, one per destination.
 
-`--merge-from` fetches the index you are actually serving and adds to it. Without
-it, the base is whatever `dist/bundles.json` happens to be on disk — which on a
-clean CI checkout is nothing, so you would publish an index containing only the
-newest entry.
+### Doing less than everything
+
+```bash
+npx vidra build --web    # the web bundle only: no compile, no platform, seconds
+npx vidra build --app    # the installer and its release, no web bundle
+```
+
+`--web` is the one you reach for weekly. It needs no MAUI workload and no Mac,
+which is the entire point of that tier. `--app` is what a per-platform release
+job runs, so a platform-agnostic bundle is not republished from two runners.
+
+### Channels
+
+A channel is a **path**, not a label, and it comes from the build rather than
+from `package.json`:
+
+```bash
+npx vidra build --channel beta      # or VIDRA_CHANNEL=beta
+```
+
+Everything moves under `dist/beta/`, and `/beta/` is appended to the feed URL
+stamped into that build. So a beta tester's app reads
+`https://updates.acme.com/notes/beta/bundles.json` and never sees stable
+entries, because they are in a different file entirely.
+
+That is deliberate: the same commit must be able to produce a stable artifact
+and a beta one, so the channel cannot live in a file the commit owns.
+**`package.json` describes the app; the stamped `vidra-updates.json` describes
+one build of it.**
+
+Do not name your default channel. Absence is the default, and adding
+`--channel stable` later creates a *third* namespace that no installed app is
+reading, which stops updates silently.
+
+### The live index is merged automatically
+
+Each publish fetches the index you are actually serving and adds to it, because
+the feed URL is in `package.json` and nothing has to be remembered. Without
+that, the base would be whatever is on disk — which on a clean CI checkout is
+nothing, so you would publish an index containing only the newest entry.
 
 That is not just untidy. A bundle is only installable by an app whose contract
 fingerprints match it, so if you have ever shipped a native release that changed
@@ -86,13 +155,12 @@ a contract, older entries are the only thing older installs can use. Dropping
 them strands exactly those users, silently, with a feed that looks perfectly
 healthy.
 
-If the index is not there yet, `--merge-from` says so and publishes the first
-one. If it cannot be fetched, the publish **fails** rather than starting empty.
+If the index is not there yet, the publish says so and writes the first one. If
+it cannot be fetched, the publish **fails** rather than starting empty.
 
-When you sign, `vidra bundle` also verifies that the index it is merging was
-signed by your key, and refuses otherwise — merging a feed someone else has
-written to and then signing the result would publish their entries under your
-signature.
+When you sign, it also verifies the index it is merging was signed by your key,
+and refuses otherwise — merging a feed someone else has written to and then
+signing the result would publish their entries under your signature.
 
 ### Uploading
 
@@ -107,27 +175,32 @@ Two rules, whatever the host:
 **S3-compatible (R2, B2, Spaces, Wasabi, S3):**
 
 ```bash
-aws s3 cp dist/ s3://$BUCKET/stable/ --recursive --exclude "bundles.json*" \
+aws s3 cp dist/feed/ s3://$BUCKET/notes/ --recursive --exclude "bundles.json*" \
   --cache-control "public, max-age=31536000, immutable"
-aws s3 cp dist/bundles.json s3://$BUCKET/stable/ --cache-control "no-cache"
-aws s3 cp dist/bundles.json.sig s3://$BUCKET/stable/ --cache-control "no-cache"
+aws s3 cp dist/feed/bundles.json     s3://$BUCKET/notes/ --cache-control "no-cache"
+aws s3 cp dist/feed/bundles.json.sig s3://$BUCKET/notes/ --cache-control "no-cache"
 ```
 
 **Cloudflare R2 via wrangler:**
 
 ```bash
-for f in dist/bundle-*.zip; do wrangler r2 object put "$BUCKET/stable/$(basename "$f")" --file "$f"; done
-wrangler r2 object put "$BUCKET/stable/bundles.json"     --file dist/bundles.json     --cache-control "no-cache"
-wrangler r2 object put "$BUCKET/stable/bundles.json.sig" --file dist/bundles.json.sig --cache-control "no-cache"
+for f in dist/feed/bundle-*.zip; do wrangler r2 object put "$BUCKET/notes/$(basename "$f")" --file "$f"; done
+wrangler r2 object put "$BUCKET/notes/bundles.json"     --file dist/feed/bundles.json     --cache-control "no-cache"
+wrangler r2 object put "$BUCKET/notes/bundles.json.sig" --file dist/feed/bundles.json.sig --cache-control "no-cache"
 ```
 
 **GitHub Releases** (use a fixed tag so the URL is stable):
 
 ```bash
-gh release upload updates dist/bundle-*.zip --clobber
-gh release upload updates dist/bundles.json dist/bundles.json.sig --clobber
-# feedUrl: https://github.com/<owner>/<repo>/releases/download/updates/bundles.json
+gh release upload updates dist/feed/bundle-*.zip --clobber
+gh release upload updates dist/feed/bundles.json dist/feed/bundles.json.sig --clobber
+# and in package.json:  "feed": "github:<owner>/<repo>"
 ```
+
+One pinned release holds the feed; per-version releases stay for humans, with
+the DMG and the installer attached. Note that GitHub serves release assets
+through a CDN and you cannot set `no-cache` on them, so a replaced index can be
+briefly stale.
 
 Cache headers matter more than they look: archive names contain the hash, so they
 can cache forever, but an index cached for hours means your rollback does not
@@ -137,10 +210,11 @@ reach anyone.
 
 ```yaml
 - run: npm version ${{ inputs.bump }} --no-git-tag-version
-- run: npx vidra bundle --merge-from https://updates.example.com/bundles.json
+- run: npx vidra build --web
   env:
     VIDRA_UPDATE_SIGNING_KEY: ${{ secrets.VIDRA_UPDATE_SIGNING_KEY }}
-- run: ./scripts/upload-feed.sh        # the two-step upload above
+    VIDRA_CHANNEL: ${{ vars.CHANNEL }}   # unset for the default ring
+- run: ./scripts/upload-feed.sh          # the two-step upload above
 ```
 
 ## What decides whether an update installs
@@ -160,7 +234,7 @@ not installable there, and the app keeps running what it has.
 
 Practically: **if you change a `[BridgeModule]`, `[BridgeEventContract]` or
 `[JsContract]`, existing installs stop accepting new bundles until you ship a
-native release.** That is the intended behaviour, and `vidra bundle` prints the
+native release.** That is the intended behaviour, and the build prints the
 fingerprints so you can see when they move.
 
 ### …and whether the bundle already installed still applies
@@ -181,7 +255,7 @@ Set aside, not blocked: nothing is wrong with that bundle, and rolling the nativ
 release back makes it installable again.
 
 A bundle whose contents are **byte-identical** to the one already serving is
-skipped too, whatever its version says. `vidra bundle` writes a deterministic
+skipped too, whatever its version says. The publish writes a deterministic
 archive, so an unchanged `ui/` republished under a new version has the same
 `sha256` — and downloading it again would gain nothing.
 
@@ -227,7 +301,7 @@ for when you are rotating a key by hand. Either way what lands is:
 {
   "vidra": {
     "updates": {
-      "feedUrl": "https://updates.example.com/bundles.json",
+      "feed": "https://updates.example.com/notes/",
       "publicKeys": ["MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE..."]
     }
   }
@@ -237,8 +311,8 @@ for when you are rotating a key by hand. Either way what lands is:
 Then publish signed:
 
 ```bash
-npx vidra bundle --sign vidra-signing-key.pem
-# or, in CI:  VIDRA_UPDATE_SIGNING_KEY="$(cat key.pem)" npx vidra bundle
+npx vidra build --web --sign vidra-signing-key.pem
+# or, in CI:  VIDRA_UPDATE_SIGNING_KEY="$(cat key.pem)" npx vidra build --web
 ```
 
 That writes `bundles.json.sig` next to the manifest — upload both.
@@ -249,7 +323,7 @@ after signing. That is the point: dropping the signature file is exactly what
 someone who cannot forge one would try. An app with **no** keys configured
 accepts an unsigned feed and says so in its log on every check.
 
-`vidra bundle` refuses to publish unsigned when your `package.json` trusts a key,
+The publish refuses to go out unsigned when your `package.json` trusts a key,
 and refuses to publish signed by a key your app does not trust — either would
 produce a feed that looks fine and reaches nobody.
 
@@ -282,11 +356,11 @@ updates. Node and .NET both do P-256 natively.
 
 ## Testing a feed locally
 
-A directory is a valid feed. Point `feedUrl` at a path, or serve it:
+A directory is a valid feed. Point `feed` at a path, or serve one:
 
 ```bash
-cd dist && python3 -m http.server 8099
-# "feedUrl": "http://127.0.0.1:8099/bundles.json"
+cd dist/feed && python3 -m http.server 8099
+# "feed": "http://127.0.0.1:8099/"
 ```
 
 `VIDRA_UPDATE_FEED_URL` overrides the stamped feed at runtime, which is the
@@ -307,16 +381,14 @@ Two things, and `npx vidra doctor` names whichever is missing.
 dotnet tool install -g vpk
 ```
 
-**2. Point it at a feed** — fill in `vidra.updates.native.feedUrl`, or:
+**2. Point it at a feed** — the same `vidra.updates.feed` that turns on web
+bundles. One directory serves both, because `bundles.json` and
+`releases.{platform}.json` never collide. Split them only if you want the app
+packages somewhere else:
 
-```bash
-npx vidra updates init --native https://updates.example.com/app/
+```json
+"feed": { "web": "https://cdn.acme.com/notes/", "app": "https://dl.acme.com/notes/" }
 ```
-
-The two `feedUrl`s differ in kind: the web-bundle one names a *file*, the native
-one names the *directory* `vpk` writes into. They can share a prefix —
-`releases.{channel}.json` and `bundles.json` never collide — which is what
-`--native` with no URL of its own gives you.
 
 Everything else is already in your app: the `Vidra.Updates.Native` reference,
 `.UseVidraNativeUpdates()` in `MauiProgram`, and `VelopackApp.Build()...Run()`
@@ -331,14 +403,14 @@ Then release:
 
 ```bash
 npm version patch
-npx vidra build --target windows
-npx vidra build --target macos     # on a Mac
+npx vidra build --target windows --app
+npx vidra build --target macos --app     # on a Mac
+npx vidra build --web                    # once, from anywhere
 ```
 
-Each build downloads the live feed into `dist/release/` first and packs into it,
-which is what produces deltas and what keeps older entries alive. Upload the
-whole of `dist/release/`, payloads first and the index last. `vidra bundle --out
-dist/release` puts both tiers under one prefix.
+Each build downloads the live feed into its feed directory first and packs into
+it, which is what produces deltas and what keeps older entries alive. Upload the
+whole directory, payloads first and the index last.
 
 What comes out, beside the usual artifact:
 
@@ -347,7 +419,7 @@ What comes out, beside the usual artifact:
 | `dist/<App>-<version>-Setup.exe` | the Windows installer, and the recommended download |
 | `dist/<App>-<version>-windows.zip` | Velopack's portable archive, under the name the ZIP target always used |
 | `dist/<App>-<version>-macos.dmg` | the DMG, now wrapping the *packed* `.app` |
-| `dist/release/` | the feed: packages, deltas, `releases.{channel}.json` |
+| `dist/feed/` | the feed: packages, deltas, `releases.{platform}.json`, and the web bundle beside them |
 
 ### Things worth knowing before you ship one
 
@@ -381,13 +453,16 @@ What comes out, beside the usual artifact:
 
 | Command | Effect |
 |---|---|
-| `vidra updates` | which tiers are on, and the URLs that turned them on |
-| `vidra updates init --feed <url>` | web-bundle updates on |
-| `vidra updates init --feed <url> --native` | both, sharing one host |
-| `vidra updates init --native <url>` | whole-app updates on, alone or elsewhere |
-| `vidra updates init --channel <name>` | label this app's web-bundle channel |
+| `vidra build` | the app, plus every tier `package.json` configures |
+| `vidra build --web` | the web bundle only: no compile, no platform |
+| `vidra build --app` | the installer and its release, no web bundle |
+| `vidra build --channel <name>` | publish to a ring; everything moves under `dist/<name>/` |
+| `vidra build --plan` | print every step and artifact, run nothing |
+| `vidra updates` | which tiers are on, and where they point |
+| `vidra updates init --feed <url>` | write the feed both tiers use |
+| `vidra updates init --web <url> --app <url>` | split them across two hosts |
 | `vidra updates init --keygen` | also generate a signing key and trust it |
-| `vidra updates init … --force` | move a feed that installed apps are already checking |
+| `vidra <command> --help` | that command's own options and examples |
 
 ### Environment
 
@@ -396,7 +471,8 @@ What comes out, beside the usual artifact:
 | `VIDRA_UPDATE_FEED_URL` | Overrides the feed URL (or a local directory path) |
 | `VIDRA_UPDATE_CHANNEL` | Overrides the channel |
 | `VIDRA_ASSET_ROOT` | Serves the WebView from a directory, bypassing updates entirely |
-| `VIDRA_UPDATE_SIGNING_KEY` | The signing key PEM, for `vidra bundle` in CI |
+| `VIDRA_UPDATE_SIGNING_KEY` | The signing key PEM, for publishing in CI |
+| `VIDRA_CHANNEL` | The channel a build publishes to (same as `--channel`) |
 | `VIDRA_NATIVE_UPDATE_FEED_URL` | Overrides the native feed directory |
 | `VIDRA_NATIVE_UPDATE_CHANNEL` | Overrides the native channel (default: `win` / `osx`) |
 | `VIDRA_NATIVE_UPDATE_ENABLED` | `0` turns native updates off for one run |
@@ -404,24 +480,35 @@ What comes out, beside the usual artifact:
 
 `vidra dev` never checks for updates — it serves the Vite dev server.
 
-## Upgrading an app scaffolded before 0.5.0
+## Upgrading an app scaffolded before 0.6.0
 
-Older scaffolds shipped the updater commented out, and turning it on took five
-steps. Nothing about them stopped working — a `vidra.updates` block still turns
-on whatever that app has wired up — but all five are now in the template (four
-of them live, the fifth as two empty fields), and `npx vidra doctor` names any
-that yours is missing. To catch up, in your host project:
+Two things changed, and `npx vidra doctor` names whichever applies to you.
 
-1. add `<PackageReference Include="Vidra.Updates.Native" Version="0.5.0" />`
-2. add `.UseVidraUpdates().UseVidraNativeUpdates()` after `.UseVidra()`
-3. uncomment `VelopackApp.Build().UseVidraLocator().Run();` and its two `using`s
-   in `Platforms/MacCatalyst/Program.cs` and `Platforms/Windows/Program.cs`
-4. `rm -rf bin obj` in that project once — Mac Catalyst's incremental build
-   reuses AOT images compiled against the old dependency graph, and a package
-   reference changes it
+**The config is one field.** `feedUrl` and `native.feedUrl` became `feed`, which
+is a *directory* rather than the `bundles.json` inside it:
 
-Then `vidra build` needs no `--native-update`: the flag is gone, and
-`vidra.updates.native.feedUrl` decides. Passing it says so and changes nothing.
+```json
+"feed": "https://updates.acme.com/notes/"
+"feed": { "web": "https://cdn/notes/", "app": "https://dl/notes/" }
+```
+
+`channel`, `native.channel` and `native.packId` are gone. A channel is a build
+input now (`--channel`, or `VIDRA_CHANNEL`), and the pack id derives from
+`<ApplicationId>`.
+
+**`vidra bundle` is `vidra build --web`**, and `vidra build --native-update` is
+just `vidra build`. Neither flag exists any more. `--merge-from` and `--out` are
+gone too: both are derived from `feed`, which is what stops a publish from
+landing somewhere the app is not reading.
+
+Feed payloads also moved from `dist/` and `dist/release/` into `dist/feed/`, so
+any upload script pointing at the old paths needs one edit.
+
+Apps scaffolded before **0.5.0** additionally need the updater itself, since it
+used to be commented out: add the `Vidra.Updates.Native` package reference, call
+`.UseVidraUpdates().UseVidraNativeUpdates()` after `.UseVidra()`, uncomment
+`VelopackApp.Build().UseVidraLocator().Run();` and its two `using`s in both
+`Platforms/*/Program.cs`, then `rm -rf bin obj` in that project once.
 
 ## Upgrading an existing Windows app
 

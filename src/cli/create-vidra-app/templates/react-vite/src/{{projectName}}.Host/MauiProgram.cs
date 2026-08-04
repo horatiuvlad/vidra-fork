@@ -10,16 +10,18 @@ public static class MauiProgram
         var builder = MauiApp.CreateBuilder();
 
         // Updates are wired up and doing nothing, which is the intended state
-        // until this app has a feed to check. Both switches are already in
-        // package.json, empty — filling one in is the whole opt-in:
+        // until this app has a feed to check. The switch is already in
+        // package.json, empty — filling it in is the whole opt-in:
         //
-        //   "vidra": { "updates": {
-        //       "feedUrl": "",           // web bundle: .../bundles.json
-        //       "native": { "feedUrl": "" }  // whole app: the directory vpk writes
-        //   } }
+        //   "vidra": { "updates": { "feed": "https://updates.example.com/notes/" } }
         //
-        // Type a URL there, or run `npx vidra updates init --feed <url> [--native]`,
-        // then publish with `npx vidra bundle` (web) or `npx vidra build` (whole app).
+        // Type a URL there, or run `npx vidra updates init --feed <url>`, then
+        // publish with `npx vidra build` (both tiers) or `npx vidra build --web`
+        // (just the UI, no compile).
+        //
+        // One directory serves both tiers. To split them across two hosts:
+        //
+        //   "feed": { "web": "https://cdn/notes/", "app": "https://dl/notes/" }
         //
         // Web bundle: your `ui/` build, applied on the next launch, no reinstall.
         // A bundle only installs when its contract fingerprints match this build,

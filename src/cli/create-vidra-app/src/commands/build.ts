@@ -5,16 +5,22 @@ import { parseArgs } from "../utils.js";
 import { formatBuildError, formatProcessError } from "../exec.js";
 import { resolveAppVersion, versionPublishArgs } from "../version.js";
 import {
-  enabledTiers,
   readUpdateConfig,
+  resolveFeeds,
+  stampedConfigFor,
   stampUpdateConfig,
   UPDATE_CONFIG_FILE,
+  type ResolvedFeeds,
   type UpdateConfig,
 } from "../update-config.js";
+import { FeedUriError, manifestUrlFor } from "../feed-uri.js";
+import { rejectUnknownFlags } from "../help.js";
+import { BUILD } from "./specs.js";
+import { distLayout, type DistLayout } from "../dist-layout.js";
+import { runWebBundle } from "./bundle.js";
 import {
   extractPackedApp,
   NativeUpdateError,
-  RELEASE_DIR,
   resolveNativeUpdateSettings,
   runNativeUpdate,
   type NativeUpdateOutcome,
@@ -76,12 +82,109 @@ const artifactName = (project: ProjectInfo, target: BuildTarget): string =>
     target.name === "macos" ? "dmg" : "zip"
   }`;
 
+/**
+ * What a build is asked to produce.
+ *
+ * `all` is the default and means "everything this app is configured for", the
+ * same rule the rest of the surface follows: config decides what is on, and a
+ * flag only ever asks for *less*. `--web` exists because shipping a UI fix must
+ * not cost a compile; `--app` because a release job on each platform should not
+ * republish a platform-agnostic bundle twice.
+ */
+export type BuildMode = "all" | "app" | "web";
+
+export const parseBuildMode = (args: Record<string, unknown>): BuildMode =>
+  args.app ? "app" : args.web ? "web" : "all";
+
+/**
+ * The channel this artifact belongs to, or null for the default one.
+ *
+ * A build input rather than configuration, because the same commit must be able
+ * to produce a stable artifact and a beta one. `package.json` describes the app;
+ * the stamped `vidra-updates.json` describes this build of it.
+ */
+export const resolveChannel = (
+  flag: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null => {
+  const raw = typeof flag === "string" ? flag : env.VIDRA_CHANNEL;
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : null;
+};
+
 export const buildCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
+  if (rejectUnknownFlags(BUILD, args)) return process.exit(1);
+
   const verbose = !!args["verbose"];
   const plan = !!args["plan"] || !!args["dry-run"];
-  const targetName = (args["target"] as string) || detectPlatform();
+  const mode = parseBuildMode(args);
+  const channel = resolveChannel(args["channel"]);
 
+  const project = detectProject(process.cwd());
+  const updateConfig = readUpdateConfig(project.root);
+
+  let feeds: ResolvedFeeds;
+  try {
+    feeds = resolveFeeds(updateConfig, channel);
+  } catch (error) {
+    if (!(error instanceof FeedUriError)) throw error;
+    console.error();
+    console.error(
+      row({ glyph: "error", label: "feed", labelWidth: LABEL_WIDTH, detail: dim(error.message) }),
+    );
+    console.error();
+    return process.exit(1);
+  }
+
+  const layout = distLayout(project.root, feeds, channel);
+
+  // `--web` needs no platform, no compiler and no MAUI workload, so it must not
+  // fail on a machine that has none of them. Resolving a target at all is the
+  // app half's business.
+  if (mode === "web") {
+    if (!feeds.web || !layout.web) {
+      console.error();
+      console.error(
+        row({
+          glyph: "error",
+          label: "no web feed",
+          labelWidth: LABEL_WIDTH,
+          detail: dim(
+            "nothing to publish — set vidra.updates.feed (npx vidra updates init --feed <url>)",
+          ),
+        }),
+      );
+      console.error();
+      return process.exit(1);
+    }
+
+    console.log();
+    console.log(
+      header("build", `web bundle${channel ? ` \u00b7 ${channel}` : ""}${plan ? " \u00b7 plan" : ""}`),
+    );
+    console.log(kv("project", project.projectName));
+    console.log(kv("version", project.displayVersion));
+    console.log();
+
+    if (plan) {
+      printWebPlan(project, layout.web, feeds);
+      console.log();
+      console.log(
+        footer(`${dim("nothing has run. re-run without")} ${lime("--plan")} ${dim("to apply.")}`),
+      );
+      console.log();
+      return;
+    }
+
+    await stepWebBundle(project, layout.web, feeds, typeof args["sign"] === "string" ? args["sign"] : undefined);
+    console.log();
+    console.log(footer(`${dim("done \u2014")} ${value(path.relative(project.root, layout.web))}`));
+    console.log();
+    return;
+  }
+
+  const targetName = (args["target"] as string) || detectPlatform();
   const target = TARGETS[targetName];
   if (!target) {
     const supported = Object.keys(TARGETS).join(", ");
@@ -89,57 +192,39 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
     console.error(
       row({
         glyph: "error",
-        detail: dim(`unsupported target: ${targetName} — supported: ${supported}`),
+        detail: dim(`unsupported target: ${targetName} \u2014 supported: ${supported}`),
       }),
     );
     process.exit(1);
   }
 
-  const project = detectProject(process.cwd());
-
   console.log();
   console.log(
-    header("build", `${target.name} \u00b7 Release${plan ? " \u00b7 plan" : ""}`),
+    header(
+      "build",
+      `${target.name} \u00b7 Release${channel ? ` \u00b7 ${channel}` : ""}${plan ? " \u00b7 plan" : ""}`,
+    ),
   );
   console.log(kv("project", project.projectName));
   console.log(kv("target", target.framework));
   console.log();
 
+  const nativeSettings: NativeUpdateSettings | null =
+    feeds.app && layout.app
+      ? resolveNativeUpdateSettings({
+          feed: feeds.app,
+          releaseDir: layout.app,
+          csprojPath: project.csprojPath,
+          projectName: project.projectName,
+          version: project.displayVersion,
+        })
+      : null;
+
   // The plan view prints every step and artifact name without running anything
-  // — the dim footer says how to commit. `--execute` is the default; `--plan`
+  // \u2014 the dim footer says how to commit. `--execute` is the default; `--plan`
   // (alias `--dry-run`) opts into the preview.
-  const updateConfig = readUpdateConfig(project.root);
-
-  // The feed URL is the flag. `vidra.updates.native.feedUrl` is both what makes
-  // this build pack a release and what lets the installed app find it, so the
-  // two can no longer disagree — which is the whole reason there is no
-  // `--native-update` any more.
-  const nativeSettings: NativeUpdateSettings | null = enabledTiers(updateConfig).native
-    ? resolveNativeUpdateSettings({
-        config: updateConfig!.native as { feedUrl: string },
-        csprojPath: project.csprojPath,
-        projectName: project.projectName,
-        version: project.displayVersion,
-      })
-    : null;
-
-  if (args["native-update"]) {
-    console.log(
-      row({
-        glyph: "skip",
-        label: "native update",
-        labelWidth: LABEL_WIDTH,
-        detail: dim(
-          nativeSettings
-            ? "--native-update is no longer needed: vidra.updates.native.feedUrl already turns this on"
-            : "--native-update no longer does anything — set vidra.updates.native.feedUrl (npx vidra updates init --native <url>)",
-        ),
-      }),
-    );
-  }
-
   if (plan) {
-    printBuildPlan(project, target, updateConfig, nativeSettings);
+    printBuildPlan(project, target, layout, feeds, nativeSettings, mode);
     console.log();
     console.log(
       footer(`${dim("nothing has run. re-run without")} ${lime("--plan")} ${dim("to apply.")}`),
@@ -155,7 +240,7 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
 
   stepBuildUi(project, verbose);
   stepCopyAssets(project);
-  stepStampUpdateConfig(project, updateConfig);
+  stepStampUpdateConfig(project, updateConfig, feeds, layout);
   const publishDir = stepDotnetPublish(project, target, verbose);
 
   const bundlePath = target.findBundle(publishDir, project.projectName);
@@ -219,9 +304,10 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
 
   const outputPath =
     released && target.name === "windows"
-      ? stepPublishVelopackWindowsArtifacts(project, target, released)
+      ? stepPublishVelopackWindowsArtifacts(project, layout, target, released)
       : await stepPackage(
           project,
+          layout,
           target,
           released ? extractPackedApp(released.outputs.portableZip!) : bundlePath,
         );
@@ -244,6 +330,13 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
     reportGatekeeper(outputPath);
   }
 
+  // The web half last, and only in the default mode. It reuses the `ui/dist`
+  // the app build already produced rather than running Vite twice.
+  if (mode === "all" && feeds.web && layout.web) {
+    console.log();
+    await stepWebBundle(project, layout.web, feeds, typeof args["sign"] === "string" ? args["sign"] : undefined);
+  }
+
   console.log();
   console.log(
     footer(
@@ -251,6 +344,56 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
     ),
   );
   console.log();
+};
+
+/**
+ * Publishes the web bundle into its feed directory.
+ *
+ * `mergeFrom` is not a flag any more: the live index is wherever `package.json`
+ * says this app publishes, so the "forgot `--merge-from` on a clean CI checkout
+ * and published an index containing only the newest entry" failure cannot
+ * happen. Passing it explicitly is what a publisher would have had to remember.
+ */
+const stepWebBundle = async (
+  project: ProjectInfo,
+  outDir: string,
+  feeds: ResolvedFeeds,
+  sign: string | undefined,
+): Promise<void> => {
+  await runWebBundle(project, {
+    outDir,
+    mergeFrom: feeds.web ? manifestUrlFor(feeds.web.base) : undefined,
+    sign,
+    // In `all` mode the app half already ran Vite into the same `ui/dist`.
+    skipBuild: fs.existsSync(path.join(project.uiDir, "dist", "index.html")),
+  });
+};
+
+const printWebPlan = (project: ProjectInfo, outDir: string, feeds: ResolvedFeeds): void => {
+  console.log(
+    row({
+      glyph: "done",
+      label: "build UI",
+      labelWidth: LABEL_WIDTH,
+      detail: `${dim("vite \u2192")} ${value("ui/dist")}`,
+    }),
+  );
+  console.log(
+    row({
+      glyph: "active",
+      label: "merge feed",
+      labelWidth: LABEL_WIDTH,
+      detail: `${dim("\u2190")} ${value(manifestUrlFor(feeds.web!.base))}`,
+    }),
+  );
+  console.log(
+    row({
+      glyph: "active",
+      label: "pack bundle",
+      labelWidth: LABEL_WIDTH,
+      detail: `${dim("\u2192")} ${value(path.relative(project.root, outDir))}`,
+    }),
+  );
 };
 
 /**
@@ -339,11 +482,20 @@ const reportGatekeeper = (artifactPath: string): void => {
   );
 };
 
+
+/** Which tiers this build publishes to, for one-line reporting. */
+const tierNames = (feeds: ResolvedFeeds): string[] =>
+  [feeds.web ? "web bundle" : null, feeds.app ? "whole app" : null].filter(
+    (name): name is string => name !== null,
+  );
+
 const printBuildPlan = (
   project: ProjectInfo,
   target: BuildTarget,
-  config: UpdateConfig | null,
+  layout: DistLayout,
+  feeds: ResolvedFeeds,
   nativeSettings: NativeUpdateSettings | null,
+  mode: BuildMode,
 ): void => {
   console.log(
     row({
@@ -361,20 +513,14 @@ const printBuildPlan = (
       detail: `${dim("\u2192")} ${value("Resources/Raw/wwwroot")}`,
     }),
   );
-  if (config) {
-    // Which tiers this app has turned on, read off the same fields the build
-    // reads: the plan is where a misspelled key should become visible.
-    const tiers = enabledTiers(config);
-    const on = [tiers.ota ? "web bundle" : null, tiers.native ? "whole app" : null].filter(Boolean);
+  const on = tierNames(feeds);
+  if (on.length > 0) {
     console.log(
       row({
-        glyph: on.length > 0 ? "done" : "manual",
+        glyph: "done",
         label: "stamp updates",
         labelWidth: LABEL_WIDTH,
-        detail:
-          on.length > 0
-            ? `${dim("\u2192")} ${value(`Resources/Raw/${UPDATE_CONFIG_FILE}`)} ${dim(`(${on.join(" + ")})`)}`
-            : dim("a vidra.updates block with no feed URL turns nothing on"),
+        detail: `${dim("\u2192")} ${value(`Resources/Raw/${UPDATE_CONFIG_FILE}`)} ${dim(`(${on.join(" + ")})`)}`,
       }),
     );
   }
@@ -396,7 +542,9 @@ const printBuildPlan = (
         label: "vpk pack",
         labelWidth: LABEL_WIDTH,
         detail: vpk
-          ? `${value(`${nativeSettings.packId} ${nativeSettings.packVersion}`)} ${dim(`\u2192 ${RELEASE_DIR}`)}`
+          ? `${value(`${nativeSettings.packId} ${nativeSettings.packVersion}`)} ${dim(
+              `\u2192 ${path.relative(project.root, nativeSettings.releaseDir)}`,
+            )}`
           : dim("vpk is not installed \u2014 dotnet tool install -g vpk"),
       }),
     );
@@ -565,28 +713,44 @@ const stepCopyAssets = (project: ProjectInfo): void => {
  * feed URL at startup without the developer writing any C#. Runs after the asset
  * copy because it writes into the same `Resources/Raw` directory.
  */
-const stepStampUpdateConfig = (project: ProjectInfo, config: UpdateConfig | null): void => {
-  stampUpdateConfig(project.hostDir, config);
+const stepStampUpdateConfig = (
+  project: ProjectInfo,
+  config: UpdateConfig | null,
+  feeds: ResolvedFeeds,
+  layout: DistLayout,
+): void => {
+  const stamped = stampedConfigFor(config, feeds);
+  stampUpdateConfig(project.hostDir, stamped);
 
-  if (!config) {
+  if (!stamped) {
     // Silent when there is nothing to say: an app that configured no feed wants
     // no updates, and a build log should not imply a feature is missing.
     return;
   }
 
-  const tiers = enabledTiers(config);
-  const on = [tiers.ota ? "web bundle" : null, tiers.native ? "whole app" : null].filter(Boolean);
-
   console.log(
     row({
-      glyph: on.length > 0 ? "done" : "manual",
+      glyph: "done",
       label: "stamp updates",
       labelWidth: LABEL_WIDTH,
       detail: `${dim("\u2192")} ${value(`Resources/Raw/${UPDATE_CONFIG_FILE}`)} ${dim(
-        on.length > 0 ? `(${on.join(" + ")})` : "(no feed URL \u2014 nothing is checked)",
+        `(${tierNames(feeds).join(" + ")})`,
       )}`,
     }),
   );
+
+  for (const [name, feed] of [["web", feeds.web], ["app", feeds.app]] as const) {
+    if (!feed) continue;
+    const dir = name === "web" ? layout.web : layout.app;
+    console.log(
+      row({
+        glyph: "plan",
+        label: `${name} feed`,
+        labelWidth: LABEL_WIDTH,
+        detail: `${value(path.relative(project.root, dir!))} ${dim("\u2192")} ${value(feed.base)}`,
+      }),
+    );
+  }
 };
 
 const countFiles = (dir: string): number => {
@@ -710,7 +874,7 @@ const stepNativeUpdate = (
         glyph: "done",
         label: "merge feed",
         labelWidth: LABEL_WIDTH,
-        detail: `${dim("vpk download →")} ${value(RELEASE_DIR)}`,
+        detail: `${dim("vpk download →")} ${value(path.relative(project.root, settings.releaseDir))}`,
       }),
     );
   }
@@ -743,7 +907,7 @@ const stepNativeUpdate = (
       label: "vpk pack",
       labelWidth: LABEL_WIDTH,
       detail: `${value(`${settings.packId} ${settings.packVersion}`)} ${dim(
-        `→ ${RELEASE_DIR} (${elapsed}s)`,
+        `→ ${path.relative(project.root, settings.releaseDir)} (${elapsed}s)`,
       )}`,
     }),
   );
@@ -754,7 +918,7 @@ const stepNativeUpdate = (
         glyph: "error",
         label: "vpk pack",
         labelWidth: LABEL_WIDTH,
-        detail: dim(`vpk wrote no portable archive to ${RELEASE_DIR}`),
+        detail: dim(`vpk wrote no portable archive to ${settings.releaseDir}`),
       }),
     );
     process.exit(1);
@@ -775,10 +939,11 @@ const stepNativeUpdate = (
  */
 const stepPublishVelopackWindowsArtifacts = (
   project: ProjectInfo,
+  layout: DistLayout,
   target: BuildTarget,
   packed: NativeUpdateOutcome,
 ): string => {
-  const outputDir = path.join(project.root, "dist");
+  const outputDir = layout.root;
   fs.ensureDirSync(outputDir);
 
   const zipPath = path.join(outputDir, artifactName(project, target));
@@ -814,10 +979,11 @@ const stepPublishVelopackWindowsArtifacts = (
 
 const stepPackage = async (
   project: ProjectInfo,
+  layout: DistLayout,
   target: BuildTarget,
   bundlePath: string,
 ): Promise<string> => {
-  const outputDir = path.join(project.root, "dist");
+  const outputDir = layout.root;
   fs.ensureDirSync(outputDir);
 
   const start = Date.now();

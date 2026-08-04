@@ -1,97 +1,60 @@
 import { buildCommand } from "./commands/build.js";
-import { bundleCommand } from "./commands/bundle.js";
 import { keygenCommand } from "./commands/keygen.js";
 import { updatesCommand } from "./commands/updates.js";
 import { verifyCommand } from "./commands/verify.js";
 import { devCommand, runCommand } from "./commands/dev.js";
 import { runDoctor } from "./doctor.js";
-import { CLI_VERSION, dim, lime, row, value, wordmark } from "./theme.js";
+import { ALL, BUILD, DEV, DOCTOR, KEYGEN, RUN, UPDATES, VERIFY } from "./commands/specs.js";
+import { renderCommandHelp, renderIndex, type CommandSpec } from "./help.js";
+import { CLI_VERSION, dim, row } from "./theme.js";
 
-const printHelp = (): void => {
-  const cmd = (name: string, desc: string): string =>
-    `    ${value(name.padEnd(10))} ${dim(desc)}`;
-  const ex = (args: string, comment: string): string =>
-    `    ${lime("vidra")} ${value(args.padEnd(22))} ${dim(`# ${comment}`)}`;
+type Handler = (argv: string[]) => Promise<void> | void;
 
-  console.log(`
-  ${wordmark()} ${dim(`v${CLI_VERSION}`)}
-
-  ${dim("usage")}
-    ${lime("vidra")} ${dim("<command> [options]")}
-
-  ${dim("commands")}
-${cmd("dev", "start vite + the native host (UI + C# reload on save)")}
-${cmd("run", "launch the native host only")}
-${cmd("build", "build & package for distribution")}
-${cmd("bundle", "pack ui/dist as an OTA bundle + update its feed")}
-${cmd("updates", "turn updates on by giving them a feed URL")}
-${cmd("keygen", "create the key that signs your update feed")}
-${cmd("verify", "check a built artifact is actually shippable")}
-${cmd("doctor", "check your environment")}
-${cmd("help", "show this message")}
-
-  ${dim("examples")}
-${ex("dev --target windows", "run the windows host")}
-${ex("dev --no-hot-reload", "skip dotnet watch, classic launch")}
-${ex("build --plan", "preview the build, run nothing")}
-${ex("build --target macos", "build & package a macOS DMG")}
-${ex("bundle", "pack an OTA bundle into dist/")}
-${ex("bundle --channel beta", "publish it on the beta channel")}
-${ex("bundle --sign key.pem", "publish a signed feed")}
-${ex("bundle --merge-from URL", "add to the feed you already publish")}
-${ex("updates", "show which update tiers are on")}
-${ex("updates init --feed URL", "turn web-bundle updates on")}
-${ex("updates init --feed URL --native", "and whole-app updates, same host")}
-${ex("keygen", "create an update signing key")}
-${ex("verify", "check the newest artifact in dist/")}
-${ex("doctor", "verify .NET SDK + MAUI workload")}
-`);
+const COMMANDS: Record<string, { spec: CommandSpec; run: Handler }> = {
+  dev: { spec: DEV, run: devCommand },
+  run: { spec: RUN, run: runCommand },
+  build: { spec: BUILD, run: buildCommand },
+  updates: { spec: UPDATES, run: updatesCommand },
+  keygen: { spec: KEYGEN, run: keygenCommand },
+  verify: { spec: VERIFY, run: verifyCommand },
+  doctor: {
+    spec: DOCTOR,
+    run: async () => {
+      process.exit(await runDoctor());
+    },
+  },
 };
 
 const main = async (): Promise<void> => {
   const args = process.argv.slice(2);
-  const command = args[0];
+  const name = args[0];
 
-  switch (command) {
-    case "dev":
-      await devCommand(args.slice(1));
-      break;
-    case "run":
-      await runCommand(args.slice(1));
-      break;
-    case "build":
-      await buildCommand(args.slice(1));
-      break;
-    case "bundle":
-      await bundleCommand(args.slice(1));
-      break;
-    case "updates":
-      await updatesCommand(args.slice(1));
-      break;
-    case "keygen":
-      await keygenCommand(args.slice(1));
-      break;
-    case "verify":
-      await verifyCommand(args.slice(1));
-      break;
-    case "doctor":
-      process.exit(await runDoctor());
-      break;
-    case "help":
-    case "--help":
-    case "-h":
-    case undefined:
-      printHelp();
-      break;
-    case "--version":
-    case "-v":
-      console.log(CLI_VERSION);
-      break;
-    default:
-      console.error(row({ glyph: "error", detail: dim(`unknown command: ${command}`) }));
-      printHelp();
-      process.exit(1);
+  if (name === undefined || name === "help" || name === "--help" || name === "-h") {
+    // `vidra help build` is the same question as `vidra build --help`.
+    const topic = args[1] ? COMMANDS[args[1]] : undefined;
+    console.log(topic ? renderCommandHelp(topic.spec) : renderIndex(ALL));
+    return;
   }
+
+  if (name === "--version" || name === "-v") {
+    console.log(CLI_VERSION);
+    return;
+  }
+
+  const command = COMMANDS[name];
+  if (!command) {
+    console.error(row({ glyph: "error", detail: dim(`unknown command: ${name}`) }));
+    console.log(renderIndex(ALL));
+    process.exit(1);
+  }
+
+  const rest = args.slice(1);
+  if (rest.includes("--help") || rest.includes("-h")) {
+    console.log(renderCommandHelp(command.spec));
+    return;
+  }
+
+  await command.run(rest);
 };
 
 main().catch((e: Error) => {

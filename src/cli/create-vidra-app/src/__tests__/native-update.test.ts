@@ -35,8 +35,14 @@ describe("resolveNativeUpdateSettings", () => {
     nodeFs.rmSync(work, { recursive: true, force: true });
   });
 
-  const resolve = (config: Parameters<typeof resolveNativeUpdateSettings>[0]["config"]) =>
-    resolveNativeUpdateSettings({ config, csprojPath: csproj, projectName: "Notes", version: "1.2.3" });
+  const resolve = (base = "https://cdn/notes/") =>
+    resolveNativeUpdateSettings({
+      feed: { uri: base, base },
+      releaseDir: path.join(work, "dist", "feed"),
+      csprojPath: csproj,
+      projectName: "Notes",
+      version: "1.2.3",
+    });
 
   /**
    * Velopack's pack id names its install directory and keys its feed. Deriving
@@ -44,16 +50,12 @@ describe("resolveNativeUpdateSettings", () => {
    * than a second one nobody would remember to keep in step.
    */
   it("takes the pack id from the app's <ApplicationId>", () => {
-    expect(resolve({ feedUrl: "https://cdn/" }).packId).toBe("com.example.notes");
-  });
-
-  it("lets a project override the pack id", () => {
-    expect(resolve({ feedUrl: "https://cdn/", packId: "notes" }).packId).toBe("notes");
+    expect(resolve().packId).toBe("com.example.notes");
   });
 
   it("falls back to the project name when the csproj has no ApplicationId", () => {
     nodeFs.writeFileSync(csproj, "<Project />");
-    expect(resolve({ feedUrl: "https://cdn/" }).packId).toBe("Notes");
+    expect(resolve().packId).toBe("Notes");
   });
 
   /**
@@ -62,16 +64,16 @@ describe("resolveNativeUpdateSettings", () => {
    * that is the name a user sees in /Applications forever after.
    */
   it("takes the pack title from <ApplicationTitle>", () => {
-    expect(resolve({ feedUrl: "https://cdn/" }).packTitle).toBe("Notes");
+    expect(resolve().packTitle).toBe("Notes");
   });
 
   it("falls back to the project name for the title too", () => {
     nodeFs.writeFileSync(csproj, "<Project />");
-    expect(resolve({ feedUrl: "https://cdn/" }).packTitle).toBe("Notes");
+    expect(resolve().packTitle).toBe("Notes");
   });
 
   it("packs the version the app already carries", () => {
-    expect(resolve({ feedUrl: "https://cdn/" }).packVersion).toBe("1.2.3");
+    expect(resolve().packVersion).toBe("1.2.3");
   });
 
   /**
@@ -79,14 +81,19 @@ describe("resolveNativeUpdateSettings", () => {
    * anything is resolved: there is no half-configured state left where a
    * release is packed that no installed app can find.
    */
-  it("carries the feed URL that turned native updates on", () => {
-    expect(resolve({ feedUrl: "https://cdn/" }).feedUrl).toBe("https://cdn/");
+  it("carries the resolved feed URL that turned this tier on", () => {
+    expect(resolve("https://cdn/notes/beta/").feedUrl).toBe("https://cdn/notes/beta/");
   });
 
-  it("leaves the channel unset so vpk uses win/osx", () => {
-    expect(resolve({ feedUrl: "https://cdn/" }).channel).toBeNull();
-    expect(resolve({ feedUrl: "https://cdn/", channel: "beta" }).channel).toBe("beta");
+  /**
+   * Velopack is never handed a channel: each Vidra channel is its own directory,
+   * so every one gets its own `releases.{platform}.json` under Velopack's own
+   * default names. Overriding those is what collapses two platforms into one index.
+   */
+  it("packs into the directory the layout chose", () => {
+    expect(resolve().releaseDir).toBe(path.join(work, "dist", "feed"));
   });
+
 });
 
 describe("readApplicationId", () => {

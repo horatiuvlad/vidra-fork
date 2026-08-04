@@ -12,7 +12,6 @@ import {
   type BundleManifest,
 } from "../commands/bundle.js";
 import { generateKeyPair, signManifest } from "../manifest-signing.js";
-import { readUpdateConfig, stampUpdateConfig, UPDATE_CONFIG_FILE } from "../update-config.js";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "vidra-bundle-"));
 
@@ -79,50 +78,14 @@ describe("zip writer", () => {
   });
 });
 
-describe("bundle options", () => {
-  it("reads the flags a publisher actually passes", () => {
-    // The first two flags are the ones a mis-padded parseArgs drops, which is
-    // how this shipped once: `vidra bundle` rebuilt the UI and wrote to the
-    // default directory while reporting success.
-    expect(parseBundleOptions(["--skip-build", "--out", "/tmp/feed", "--channel", "beta"])).toEqual({
-      out: "/tmp/feed",
-      channel: "beta",
-      skipBuild: true,
-    });
-  });
-
-  it("accepts --key=value too", () => {
-    expect(parseBundleOptions(["--out=feed", "--channel=stable"])).toMatchObject({
-      out: "feed",
-      channel: "stable",
-    });
-  });
-
-  it("defaults to dist/ and a real build", () => {
-    expect(parseBundleOptions([])).toEqual({
-      out: "dist",
-      channel: undefined,
-      skipBuild: false,
-      sign: undefined,
-      mergeFrom: undefined,
-    });
-  });
-
-  it("reads --merge-from and --sign", () => {
-    expect(parseBundleOptions(["--merge-from", "https://e.com/bundles.json", "--sign", "k.pem"]))
-      .toMatchObject({ mergeFrom: "https://e.com/bundles.json", sign: "k.pem" });
-  });
-});
-
 describe("feed manifest", () => {
-  const entry = (version: string, sha: string, channel?: string) => ({
+  const entry = (version: string, sha: string) => ({
     version,
     url: `bundle-${version}.zip`,
     sha256: sha,
     size: 100,
     coreFingerprint: "core",
     appFingerprint: "app",
-    ...(channel ? { channel } : {}),
   });
 
   it("appends a new version", () => {
@@ -133,20 +96,12 @@ describe("feed manifest", () => {
 
   it("replaces a republished version instead of duplicating it", () => {
     // Two entries claiming one version is a feed that behaves differently
-    // depending on which the client happens to pick.
+    // depending on which the client happens to pick. No channel in the key:
+    // channels are directories now, so two channels are two indexes.
     const manifest = mergeManifest({ schema: 1, bundles: [entry("1.0.0", "aaa")] }, entry("1.0.0", "ccc"));
 
     expect(manifest.bundles).toHaveLength(1);
     expect(manifest.bundles[0]!.sha256).toBe("ccc");
-  });
-
-  it("keeps the same version on a different channel", () => {
-    const manifest = mergeManifest(
-      { schema: 1, bundles: [entry("1.0.0", "aaa")] },
-      entry("1.0.0", "ccc", "beta"),
-    );
-
-    expect(manifest.bundles).toHaveLength(2);
   });
 
   it("starts fresh rather than trusting a manifest from a newer schema", () => {
@@ -163,92 +118,6 @@ describe("feed manifest", () => {
     fs.writeFileSync(file, "{ not json");
 
     expect(readManifest(file).bundles).toEqual([]);
-  });
-});
-
-describe("vidra.updates config", () => {
-  const project = (pkg: unknown): string => {
-    const dir = tmp();
-    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg));
-    return dir;
-  };
-
-  it("reads the block from the app's package.json", () => {
-    const root = project({
-      name: "app",
-      version: "1.0.0",
-      vidra: { updates: { feedUrl: "https://example.com/bundles.json", channel: "beta" } },
-    });
-
-    expect(readUpdateConfig(root)).toEqual({
-      feedUrl: "https://example.com/bundles.json",
-      channel: "beta",
-    });
-  });
-
-  it("treats a missing or empty block as no configuration", () => {
-    expect(readUpdateConfig(project({ name: "app" }))).toBeNull();
-    expect(readUpdateConfig(project({ name: "app", vidra: { updates: {} } }))).toBeNull();
-    expect(readUpdateConfig(project({ name: "app", vidra: { updates: { feedUrl: "  " } } }))).toBeNull();
-  });
-
-  it("reads a single publicKey and a publicKeys array", () => {
-    const single = project({
-      name: "app",
-      vidra: { updates: { feedUrl: "https://e.com/b.json", publicKey: "AAA" } },
-    });
-    const many = project({
-      name: "app",
-      vidra: { updates: { feedUrl: "https://e.com/b.json", publicKeys: ["AAA", "BBB"] } },
-    });
-
-    expect(readUpdateConfig(single)?.publicKeys).toEqual(["AAA"]);
-    // Several so a key can be rotated: publish under the new one while
-    // installed apps still trust the old one.
-    expect(readUpdateConfig(many)?.publicKeys).toEqual(["AAA", "BBB"]);
-  });
-
-  it("has no keys when none are configured, which is what allows an unsigned feed", () => {
-    const root = project({ name: "app", vidra: { updates: { feedUrl: "https://e.com/b.json" } } });
-
-    expect(readUpdateConfig(root)?.publicKeys).toBeUndefined();
-  });
-
-  it("stamps the keys so the host can require a signature", () => {
-    const hostDir = tmp();
-    stampUpdateConfig(hostDir, { feedUrl: "https://e.com/b.json", publicKeys: ["AAA"] });
-
-    const stamped = path.join(hostDir, "Resources", "Raw", UPDATE_CONFIG_FILE);
-    expect(JSON.parse(fs.readFileSync(stamped, "utf8")).publicKeys).toEqual(["AAA"]);
-  });
-
-  it("keeps an explicit enabled:false", () => {
-    const root = project({
-      name: "app",
-      vidra: { updates: { feedUrl: "https://example.com/bundles.json", enabled: false } },
-    });
-
-    expect(readUpdateConfig(root)?.enabled).toBe(false);
-  });
-
-  it("stamps the config into Resources/Raw", () => {
-    const hostDir = tmp();
-    stampUpdateConfig(hostDir, { feedUrl: "https://example.com/bundles.json" });
-
-    const stamped = path.join(hostDir, "Resources", "Raw", UPDATE_CONFIG_FILE);
-    expect(JSON.parse(fs.readFileSync(stamped, "utf8"))).toEqual({
-      feedUrl: "https://example.com/bundles.json",
-    });
-  });
-
-  it("removes a stale config when the block is gone", () => {
-    // Otherwise an app that dropped its feed keeps shipping the old one, and
-    // keeps updating from a host the developer thinks they disconnected.
-    const hostDir = tmp();
-    stampUpdateConfig(hostDir, { feedUrl: "https://example.com/bundles.json" });
-    stampUpdateConfig(hostDir, null);
-
-    expect(fs.existsSync(path.join(hostDir, "Resources", "Raw", UPDATE_CONFIG_FILE))).toBe(false);
   });
 });
 

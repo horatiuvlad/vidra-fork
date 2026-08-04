@@ -243,7 +243,7 @@ describe("diagnoseUpdateConfiguration", () => {
 
   it("says nothing about a scaffolded app with a feed", () => {
     expect(
-      diagnoseUpdateConfiguration({ ...clean, blockState: EDITED, config: { feedUrl: "https://cdn/bundles.json" } }),
+      diagnoseUpdateConfiguration({ ...clean, blockState: EDITED, config: { feed: "https://cdn/notes/" } }),
     ).toEqual([]);
   });
 
@@ -253,15 +253,6 @@ describe("diagnoseUpdateConfiguration", () => {
    * which is indistinguishable at runtime from an app that wants no updates.
    */
   it("catches a block that turns nothing on", () => {
-    expect(names({ ...clean, blockState: EDITED, config: { channel: "stable" } })).toEqual(["Update feed"]);
-  });
-
-  /**
-   * The literal typo. `feedURL` parses to nothing usable, so the config reads
-   * as null — identical to an app that wants no updates, except for the block
-   * sitting there in package.json.
-   */
-  it("catches a block whose only key is misspelled", () => {
     expect(names({ ...clean, blockState: EDITED, config: null })).toEqual(["Update feed"]);
   });
 
@@ -269,21 +260,34 @@ describe("diagnoseUpdateConfiguration", () => {
     const [found] = diagnoseUpdateConfiguration({
       ...clean,
       blockState: EDITED,
-      config: { feedUrl: "https://cdn/bundles.json", enabled: false },
+      config: { feed: "https://cdn/notes/", enabled: false },
     });
 
     expect(found.name).toBe("Update feed");
     expect(found.detail).toContain("enabled: false");
   });
 
-  it("catches a native block that never got its URL", () => {
+  /** A shorthand we do not ship would bake a wrong URL into every install. */
+  it("catches a feed it cannot resolve", () => {
+    const [found] = diagnoseUpdateConfiguration({
+      ...clean,
+      blockState: EDITED,
+      config: { feed: "s3://notes-updates/app/" },
+    });
+
+    expect(found.name).toBe("Update feed");
+    expect(found.detail).toContain("unknown feed scheme");
+  });
+
+  /** One tier on and the other off is an ordinary configuration, not a fault. */
+  it("says nothing about an app that only publishes web bundles", () => {
     expect(
-      names({
+      diagnoseUpdateConfiguration({
         ...clean,
         blockState: EDITED,
-        config: { feedUrl: "https://cdn/bundles.json", native: { channel: "osx" } },
+        config: { feed: { web: "https://cdn/notes/" } },
       }),
-    ).toEqual(["Native feed"]);
+    ).toEqual([]);
   });
 
   /**
@@ -296,7 +300,7 @@ describe("diagnoseUpdateConfiguration", () => {
       names({
         ...clean,
         blockState: EDITED,
-        config: { feedUrl: "https://cdn/bundles.json" },
+        config: { feed: { web: "https://cdn/notes/" } },
         mauiProgram: "builder.UseVidra();",
       }),
     ).toEqual(["OTA updates wired up"]);
@@ -307,7 +311,7 @@ describe("diagnoseUpdateConfiguration", () => {
       names({
         ...clean,
         blockState: EDITED,
-        config: { feedUrl: "https://cdn/bundles.json", native: { feedUrl: "https://cdn/" } },
+        config: { feed: "https://cdn/notes/" },
         mauiProgram: "builder.UseVidra().UseVidraUpdates();",
         csproj: '<PackageReference Include="Vidra.Hosting.Maui" Version="0.4.0" />',
         entryPoints: { Windows: "static void Main() { }" },
@@ -328,7 +332,7 @@ describe("diagnoseUpdateConfiguration", () => {
       names({
         ...clean,
         blockState: EDITED,
-        config: { feedUrl: "https://cdn/b.json", native: { feedUrl: "https://cdn/" } },
+        config: { feed: "https://cdn/notes/" },
         entryPoints: { MacCatalyst: "// VelopackApp.Build().UseVidraLocator().Run();" },
       }),
     ).toEqual(["Velopack entry point (MacCatalyst)"]);
@@ -344,7 +348,7 @@ describe("diagnoseUpdateConfiguration", () => {
       names({
         ...clean,
         blockState: EDITED,
-        config: { feedUrl: "https://cdn/bundles.json", publicKeys: ["k"] },
+        config: { feed: "https://cdn/notes/", publicKeys: ["k"] },
         publishedUnsigned: true,
       }),
     ).toEqual(["Feed signature"]);
@@ -355,7 +359,7 @@ describe("diagnoseUpdateConfiguration", () => {
       diagnoseUpdateConfiguration({
         ...clean,
         blockState: EDITED,
-        config: { feedUrl: "https://cdn/bundles.json" },
+        config: { feed: "https://cdn/notes/" },
         publishedUnsigned: true,
       }),
     ).toEqual([]);
@@ -373,8 +377,14 @@ describe("diagnoseUpdateConfiguration", () => {
       "builder.UseMauiApp<App>().UseVidra();",
     ].join("\n");
 
-    expect(names({ ...clean, blockState: EDITED, config: { feedUrl: "https://cdn/bundles.json" }, mauiProgram: template }))
-      .toEqual(["OTA updates wired up"]);
+    expect(
+      names({
+        ...clean,
+        blockState: EDITED,
+        config: { feed: { web: "https://cdn/notes/" } },
+        mauiProgram: template,
+      }),
+    ).toEqual(["OTA updates wired up"]);
   });
 
   /**
@@ -387,7 +397,7 @@ describe("diagnoseUpdateConfiguration", () => {
       names({
         ...clean,
         blockState: EDITED,
-        config: { feedUrl: "https://cdn/b.json", native: { feedUrl: "https://cdn/" } },
+        config: { feed: "https://cdn/notes/" },
         mauiProgram: null,
         csproj: null,
         entryPoints: {},

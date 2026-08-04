@@ -2,8 +2,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import fs from "fs-extra";
 import { execSync } from "node:child_process";
-import { parseArgs } from "../utils.js";
-import { detectProject, type ProjectInfo } from "../project.js";
+import type { ProjectInfo } from "../project.js";
 import { createZip, readDirectoryEntries } from "../zip.js";
 import { readUpdateConfig } from "../update-config.js";
 import {
@@ -16,15 +15,13 @@ import {
 import {
   amber,
   dim,
-  footer,
-  header,
   row,
   STEP_LABEL_WIDTH as LABEL_WIDTH,
   value,
 } from "../theme.js";
 
 /**
- * `vidra bundle` — the publisher half of OTA updates.
+ * The web-bundle half of `vidra build`, reached as `vidra build --web`.
  *
  * Produces the two things a feed needs and nobody can reasonably produce by
  * hand: a deterministic archive of `ui/dist`, and an entry describing it that
@@ -33,6 +30,9 @@ import {
  * core one by the SDK's codegen, the app one by the project's — so asking a
  * developer to copy them into a manifest would be asking for the one mistake
  * that makes an update silently uninstallable.
+ *
+ * It needs no platform, no compiler and no MAUI workload, which is the entire
+ * point of the tier: shipping a UI fix should not cost a native build.
  */
 
 export interface BundleEntry {
@@ -42,7 +42,6 @@ export interface BundleEntry {
   size: number;
   coreFingerprint: string;
   appFingerprint: string;
-  channel?: string;
 }
 
 export interface BundleManifest {
@@ -52,45 +51,27 @@ export interface BundleManifest {
 
 const SCHEMA = 1;
 
-export interface BundleOptions {
-  out: string;
-  channel?: string;
-  skipBuild: boolean;
-  /** Path to the signing key; the environment is consulted when absent. */
-  sign?: string;
+export interface WebBundleOptions {
+  /** Absolute directory this publishes into, decided by the dist layout. */
+  outDir: string;
   /**
-   * Where the index being added to lives — a URL or a directory. Without it the
-   * out-dir's own `bundles.json` is the base, which on a clean checkout is
-   * nothing at all.
+   * The live index this publish adds to. Resolved from `package.json` rather
+   * than passed by hand: forgetting it on a clean CI checkout used to publish
+   * an index containing only the newest entry, which strands every install that
+   * can only run an older one.
    */
   mergeFrom?: string;
+  /** Path to the signing key; the environment is consulted when absent. */
+  sign?: string;
+  /** Skip the Vite build, for when the caller already ran it. */
+  skipBuild: boolean;
 }
 
-/**
- * Reads the command's flags.
- *
- * The `["_", "_", ...]` padding is the house convention: `parseArgs` is written
- * for a raw `process.argv` and skips the first two entries, so a command that
- * passes its own already-sliced argv silently loses its first two flags.
- */
-export const parseBundleOptions = (argv: string[]): BundleOptions => {
-  const args = parseArgs(["_", "_", ...argv]);
-  return {
-    out: typeof args.out === "string" ? args.out : "dist",
-    channel: typeof args.channel === "string" ? args.channel : undefined,
-    skipBuild: !!args["skip-build"],
-    sign: typeof args.sign === "string" ? args.sign : undefined,
-    mergeFrom: typeof args["merge-from"] === "string" ? args["merge-from"] : undefined,
-  };
-};
-
-export const bundleCommand = async (argv: string[]): Promise<void> => {
-  const options = parseBundleOptions(argv);
-  const project = detectProject(process.cwd());
-  const outDir = path.resolve(project.root, options.out);
-  const channel = options.channel;
-
-  console.log(header("bundle", `${project.projectName} ${project.displayVersion}`));
+export const runWebBundle = async (
+  project: ProjectInfo,
+  options: WebBundleOptions,
+): Promise<void> => {
+  const outDir = options.outDir;
 
   if (!options.skipBuild) {
     stepBuildUi(project);
@@ -135,7 +116,6 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
     size: archive.length,
     coreFingerprint: fingerprints.core,
     appFingerprint: fingerprints.app,
-    ...(channel ? { channel } : {}),
   };
 
   const manifestPath = path.join(outDir, "bundles.json");
@@ -163,14 +143,6 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
     }),
   );
 
-  console.log(
-    footer(
-      dim(
-        `upload ${value(path.relative(project.root, outDir) || "dist")}/ to your feed host — ` +
-          `every file, and bundles.json last`,
-      ),
-    ),
-  );
 };
 
 /**
@@ -184,7 +156,7 @@ export const bundleCommand = async (argv: string[]): Promise<void> => {
  * strands exactly those users.
  */
 export const loadBaseManifest = async (
-  options: BundleOptions,
+  options: Pick<WebBundleOptions, "mergeFrom">,
   outDir: string,
   privateKeyPem: string | null,
 ): Promise<BundleManifest> => {
@@ -282,7 +254,7 @@ const safeParse = (text: string): { algorithm: string; keyId: string; signature:
 };
 
 /** The key this publish will sign with, or null when it will not sign. */
-const signingKeyFor = (options: BundleOptions): string | null => {
+const signingKeyFor = (options: Pick<WebBundleOptions, "sign">): string | null => {
   try {
     return resolveSigningKey(options.sign);
   } catch {
@@ -470,9 +442,11 @@ export const mergeManifest = (
   manifest: BundleManifest,
   entry: BundleEntry,
 ): BundleManifest => {
+  // No channel in the key: a channel is a directory now, so two channels are two
+  // indexes and an entry never has to distinguish itself from its own twin
+  // published elsewhere.
   const supersedes = (existing: BundleEntry): boolean =>
     existing.version === entry.version &&
-    (existing.channel ?? null) === (entry.channel ?? null) &&
     existing.coreFingerprint === entry.coreFingerprint &&
     existing.appFingerprint === entry.appFingerprint;
 

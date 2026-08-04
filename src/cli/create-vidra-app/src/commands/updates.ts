@@ -1,9 +1,17 @@
 import path from "node:path";
 import { parseArgs } from "../utils.js";
 import { detectProject } from "../project.js";
-import { enabledTiers, readUpdateConfig, writeUpdateConfig } from "../update-config.js";
+import {
+  readUpdateConfig,
+  resolveFeeds,
+  writeUpdateConfig,
+  type FeedSplit,
+} from "../update-config.js";
+import { FeedUriError } from "../feed-uri.js";
 import { writeSigningKeyPair } from "./keygen.js";
 import { resolveVpk } from "../velopack.js";
+import { rejectUnknownFlags } from "../help.js";
+import { UPDATES } from "./specs.js";
 import {
   amber,
   dim,
@@ -18,15 +26,15 @@ import {
 /**
  * `vidra updates` — reading and writing the only switch there is.
  *
- * Every scaffolded app already carries the whole updater *and* both feed URLs,
- * blank, in its own `package.json`. Typing one in is the entire opt-in, so this
- * command is a convenience rather than a gate: `init` writes the same fields a
- * hand-edit would (deriving the native URL from the OTA one, and wiring a
- * signing key if asked), and `vidra updates` with no arguments reads back which
- * tiers that left on.
+ * Every scaffolded app already carries the whole updater *and* a blank `feed`
+ * field in its own `package.json`. Typing a URL in is the entire opt-in, so this
+ * command is a convenience rather than a gate: `init` writes the same field a
+ * hand-edit would, and `vidra updates` reads back what that left on.
  */
 export const updatesCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
+  if (rejectUnknownFlags(UPDATES, args)) return process.exit(1);
+
   const sub = (args._ as string[])[0] ?? "status";
 
   switch (sub) {
@@ -34,7 +42,7 @@ export const updatesCommand = async (argv: string[]): Promise<void> => {
       printStatus();
       break;
     case "init":
-      await initUpdates(args);
+      initUpdates(args);
       break;
     default:
       console.error(
@@ -45,124 +53,65 @@ export const updatesCommand = async (argv: string[]): Promise<void> => {
   }
 };
 
-/**
- * Derives the native feed from the OTA one: the same directory, since the OTA
- * URL names a file inside it and Velopack's names the directory itself.
- *
- * They are allowed to share it — `bundles.json` and `releases.{channel}.json`
- * never collide — and sharing is what most people want, so `--native` with no
- * value means "the same place".
- */
-export const deriveNativeFeedUrl = (otaFeedUrl: string): string => {
-  const trimmed = otaFeedUrl.trim();
-  const cut = trimmed.lastIndexOf("/");
-  // No slash at all is a URL we do not understand well enough to rewrite; hand
-  // it back and let the developer see what was written.
-  if (cut < 0) return trimmed;
-  return trimmed.slice(0, cut + 1);
-};
-
-const initUpdates = async (args: ReturnType<typeof parseArgs>): Promise<void> => {
+const initUpdates = (args: ReturnType<typeof parseArgs>): void => {
   const project = detectProject(process.cwd());
   const existing = readUpdateConfig(project.root);
   const force = !!args.force;
 
   const feed = typeof args.feed === "string" ? args.feed.trim() : null;
-  const nativeArg = args.native;
-  const channel = typeof args.channel === "string" ? args.channel.trim() : null;
+  const web = typeof args.web === "string" ? args.web.trim() : null;
+  const app = typeof args.app === "string" ? args.app.trim() : null;
 
-  if (!feed && nativeArg === undefined) {
+  if (!feed && !web && !app) {
     console.error(row({ glyph: "error", detail: dim("nothing to configure") }));
     console.error(
       footer(
         dim(
-          `pass a feed: ${lime("vidra updates init --feed")} ${value("https://updates.example.com/bundles.json")}`,
+          `pass a feed: ${lime("vidra updates init --feed")} ${value("https://updates.example.com/notes/")}`,
         ),
       ),
     );
-    process.exit(1);
+    return process.exit(1);
   }
 
-  if (nativeArg === true && !feed) {
-    console.error(
-      row({ glyph: "error", detail: dim("--native has nothing to derive from without --feed") }),
-    );
-    console.error(footer(dim("give it a URL of its own: --native https://updates.example.com/app/")));
-    process.exit(1);
-  }
-
-  // `--native` alone means "same place as the web bundles"; `--native <url>`
-  // names its own. Both are ordinary: one host for everything is the common
-  // case, and a separate one is what you do when the app archives are big
-  // enough to want their own bucket.
-  const nativeFeed =
-    typeof nativeArg === "string"
-      ? nativeArg.trim()
-      : nativeArg === true
-        ? deriveNativeFeedUrl(feed!)
-        : null;
+  // `--feed` is one destination for both tiers, which is the common case and the
+  // shape that keeps everything in one directory. `--web` / `--app` split them,
+  // for when the app packages are big enough to want their own bucket.
+  const next: string | FeedSplit = feed ? feed : { ...(web ? { web } : {}), ...(app ? { app } : {}) };
 
   // Refusing to silently repoint a live feed is the same rule as `keygen`: apps
   // already installed are looking at the old URL, and nothing about that is
-  // recoverable from the terminal after the fact.
-  const clash =
-    (feed && existing?.feedUrl && existing.feedUrl !== feed && "feedUrl") ||
-    (nativeFeed &&
-      existing?.native?.feedUrl &&
-      existing.native.feedUrl !== nativeFeed &&
-      "native.feedUrl") ||
-    null;
-
-  if (clash && !force) {
+  // recoverable from the terminal afterwards.
+  if (existing?.feed && !force && JSON.stringify(existing.feed) !== JSON.stringify(next)) {
     console.error(
       row({
         glyph: "error",
         label: "already set",
         labelWidth: LABEL_WIDTH,
         detail: dim(
-          `vidra.updates.${clash} already points somewhere else — installed apps are checking that URL`,
+          "vidra.updates.feed already points somewhere else — installed apps are checking that URL",
         ),
       }),
     );
     console.error(footer(dim("pass --force if you mean to move the feed")));
-    process.exit(1);
+    return process.exit(1);
   }
 
   console.log(header("updates", "init"));
 
-  const written = writeUpdateConfig(project.root, {
-    ...(feed ? { feedUrl: feed } : {}),
-    ...(channel ? { channel } : {}),
-    ...(nativeFeed ? { native: { feedUrl: nativeFeed } } : {}),
-  });
+  const written = writeUpdateConfig(project.root, { feed: next });
 
-  if (feed) {
-    console.log(
-      row({
-        glyph: "done",
-        label: "web bundle",
-        labelWidth: LABEL_WIDTH,
-        detail: `${value(feed)} ${dim("— npx vidra bundle publishes here")}`,
-      }),
-    );
+  let feeds;
+  try {
+    feeds = resolveFeeds(written);
+  } catch (error) {
+    if (!(error instanceof FeedUriError)) throw error;
+    console.error(row({ glyph: "error", label: "feed", labelWidth: LABEL_WIDTH, detail: dim(error.message) }));
+    return process.exit(1);
   }
 
-  if (nativeFeed) {
-    console.log(
-      row({
-        glyph: "done",
-        label: "whole app",
-        labelWidth: LABEL_WIDTH,
-        detail: `${value(nativeFeed)} ${dim("— npx vidra build packs a release here")}`,
-      }),
-    );
-  }
-
-  if (channel) {
-    console.log(
-      row({ glyph: "done", label: "channel", labelWidth: LABEL_WIDTH, detail: value(channel) }),
-    );
-  }
+  feedRow("web bundle", feeds.web?.base ?? null, "npx vidra build --web publishes here");
+  feedRow("whole app", feeds.app?.base ?? null, "npx vidra build packs a release here");
 
   if (args.keygen) {
     signWithNewKey(project.root, force);
@@ -177,7 +126,7 @@ const initUpdates = async (args: ReturnType<typeof parseArgs>): Promise<void> =>
     }),
   );
 
-  if (nativeFeed && !resolveVpk()) {
+  if (feeds.app && !resolveVpk()) {
     console.log(
       row({
         glyph: "manual",
@@ -201,7 +150,7 @@ const initUpdates = async (args: ReturnType<typeof parseArgs>): Promise<void> =>
   }
 
   console.log();
-  console.log(footer(dim(`next: ${lime("npm version patch")} ${dim("then")} ${lime("npx vidra bundle")}`)));
+  console.log(footer(dim(`next: ${lime("npm version patch")} ${dim("then")} ${lime("npx vidra build")}`)));
   console.log();
 };
 
@@ -250,18 +199,21 @@ const signWithNewKey = (projectRoot: string, force: boolean): void => {
 const printStatus = (): void => {
   const project = detectProject(process.cwd());
   const config = readUpdateConfig(project.root);
-  const tiers = enabledTiers(config);
 
   console.log(header("updates", project.projectName));
 
-  tierRow("web bundle", tiers.ota, config?.feedUrl, config?.enabled, "vidra.updates.feedUrl");
-  tierRow(
-    "whole app",
-    tiers.native,
-    config?.native?.feedUrl,
-    config?.native?.enabled,
-    "vidra.updates.native.feedUrl",
-  );
+  let feeds;
+  try {
+    feeds = resolveFeeds(config);
+  } catch (error) {
+    if (!(error instanceof FeedUriError)) throw error;
+    console.log(row({ glyph: "error", label: "feed", labelWidth: LABEL_WIDTH, detail: dim(error.message) }));
+    console.log();
+    return;
+  }
+
+  feedRow("web bundle", feeds.web?.base ?? null, "vidra.updates.feed is empty");
+  feedRow("whole app", feeds.app?.base ?? null, "vidra.updates.feed is empty");
 
   const keys = config?.publicKeys?.length ?? 0;
   console.log(
@@ -276,46 +228,34 @@ const printStatus = (): void => {
     }),
   );
 
-  if (config?.channel) {
-    console.log(
-      row({ glyph: "done", label: "channel", labelWidth: LABEL_WIDTH, detail: value(config.channel) }),
-    );
-  }
-
   console.log();
-  if (!tiers.ota && !tiers.native) {
+  if (!feeds.web && !feeds.app) {
     console.log(
       footer(
         dim(
-          `the fields are in package.json waiting for a URL — fill one in, or: ${lime("npx vidra updates init --feed <url>")}`,
+          `the field is in package.json waiting for a URL — fill it in, or: ${lime("npx vidra updates init --feed <url>")}`,
         ),
       ),
     );
   } else {
-    console.log(footer(dim("read at build time and stamped into the app as vidra-updates.json")));
+    console.log(
+      footer(
+        dim(
+          `resolved at build time and stamped into the app; a ${value("--channel")} adds a path segment`,
+        ),
+      ),
+    );
   }
   console.log();
 };
 
-const tierRow = (
-  label: string,
-  on: boolean,
-  feedUrl: string | undefined,
-  enabled: boolean | undefined,
-  field: string,
-): void => {
+const feedRow = (label: string, base: string | null, off: string): void => {
   console.log(
     row({
-      glyph: on ? "done" : "skip",
+      glyph: base ? "done" : "skip",
       label,
       labelWidth: LABEL_WIDTH,
-      detail: on
-        ? value(feedUrl!)
-        : feedUrl
-          ? dim(`${feedUrl} ${amber("(enabled: false)")}`)
-          : enabled === false
-            ? dim(`off — ${field} is empty, and enabled is false`)
-            : dim(`off — ${field} is empty`),
+      detail: base ? value(base) : dim(`off — ${off}`),
     }),
   );
 };

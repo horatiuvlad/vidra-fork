@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "../utils.js";
 import { generateKeyPair } from "../manifest-signing.js";
+import { rejectUnknownFlags } from "../help.js";
+import { KEYGEN } from "./specs.js";
 import {
   amber,
   dim,
@@ -65,6 +67,8 @@ export const writeSigningKeyPair = (
  */
 export const keygenCommand = async (argv: string[]): Promise<void> => {
   const args = parseArgs(["_", "_", ...argv]);
+  if (rejectUnknownFlags(KEYGEN, args)) return process.exit(1);
+
   const out = path.resolve(
     typeof args.out === "string" ? args.out : "vidra-signing-key.pem",
   );

@@ -610,8 +610,10 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          # The opt-in a real app makes: one builder call, and a feed in
-          # package.json that `vidra build` stamps into the bundle.
+          # The whole opt-in a real app makes: a feed URL in package.json. The
+          # builder call, the package reference and the entry points all ship in
+          # the template, which the assertion below is here to keep honest.
+          #
           # A real signing key, made by the command a publisher would run. The
           # public half goes into package.json, which makes signatures mandatory
           # for this app — so the whole run also proves the signed path works.
@@ -619,19 +621,20 @@ jobs:
             keygen --out ota-signing-key.pem
           node -e "
             const fs = require('fs');
-            const file = 'src/VidraSmoke.Host/MauiProgram.cs';
-            const source = fs.readFileSync(file, 'utf8');
-            if (!source.includes('.UseVidra()')) { console.error('no UseVidra() call to extend'); process.exit(1); }
-            fs.writeFileSync(file, source.replace('.UseVidra()', '.UseVidra()\n            .UseVidraUpdates()'));
+            const source = fs.readFileSync('src/VidraSmoke.Host/MauiProgram.cs', 'utf8')
+              .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+            if (!source.includes('.UseVidraUpdates()')) {
+              console.error('the scaffolded app does not call .UseVidraUpdates()');
+              process.exit(1);
+            }
             const publicKey = fs.readFileSync('ota-signing-key.pem.pub', 'utf8').trim();
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.vidra = { updates: { feedUrl: 'http://127.0.0.1:8099/bundles.json', publicKeys: [publicKey] } };
+            pkg.vidra = { updates: { feed: 'http://127.0.0.1:8099/', publicKeys: [publicKey] } };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           sed 's/__PROJECT_NAMESPACE__/VidraSmoke/' \
             "$GITHUB_WORKSPACE/tests/smoke/ota-main-page.cs.in" \
             > src/VidraSmoke.Host/MainPage.cs
-          grep -n "UseVidraUpdates" src/VidraSmoke.Host/MauiProgram.cs
 
       - name: Rebuild the app with updates enabled
         shell: bash
@@ -730,7 +733,7 @@ jobs:
         run: |
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
             build --target ${{ matrix.target }}
-          ls -la dist dist/release
+          ls -la dist dist/feed
 
       # `vpk pack` overwrites the un-versioned artifacts in its output directory
       # on every release, so anything from 1.0.0 has to be taken before 1.0.1 is
@@ -742,7 +745,7 @@ jobs:
         run: |
           rm -rf "${{ runner.temp }}/native-install"
           mkdir -p "${{ runner.temp }}/native-install"
-          zip="$(ls dist/release/*Portable.zip | head -1)"
+          zip="$(ls dist/feed/*Portable.zip | head -1)"
           echo "portable: $zip"
           if [ "$RUNNER_OS" = "macOS" ]; then
             ditto -x -k "$zip" "${{ runner.temp }}/native-install"
@@ -763,8 +766,8 @@ jobs:
             --project "$PWD" --name VidraSmoke --version 1.0.1
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
             build --target ${{ matrix.target }}
-          ls -la dist/release
-          cat dist/release/releases*.json
+          ls -la dist/feed
+          cat dist/feed/releases*.json
 
       # Rebuilding at an unchanged version is the ordinary inner loop now that a
       # config field, not a flag, decides whether a build packs — so it has to
@@ -779,15 +782,15 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          before="$(ls dist/release | sort | tr '\n' ' ')"
+          before="$(ls dist/feed | sort | tr '\n' ' ')"
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
             build --target ${{ matrix.target }} 2>&1 | tee rebuild.log
           grep -qi "already in the feed" rebuild.log || {
             echo "::error::expected the 'already in the feed' skip"; exit 1; }
-          after="$(ls dist/release | sort | tr '\n' ' ')"
+          after="$(ls dist/feed | sort | tr '\n' ' ')"
           [ "$before" = "$after" ] || {
             echo "::error::the release directory changed on a rebuild of a published version"
-            ls -la dist/release; exit 1; }
+            ls -la dist/feed; exit 1; }
 
       - name: Install 1.0.0 with the generated Setup.exe (Windows)
         if: runner.os == 'Windows'
@@ -816,7 +819,7 @@ jobs:
           native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi; }
           node "$(native "$GITHUB_WORKSPACE/tests/smoke/native-update-e2e.mjs")" \
             --exe "$(native "$NATIVE_EXE")" \
-            --feed "$(native "$PWD/dist/release")" \
+            --feed "$(native "$PWD/dist/feed")" \
             --work "$(native "${{ runner.temp }}/native-work")"
 
       - name: The updated app is still signed (macOS)
@@ -852,7 +855,26 @@ jobs:
           # and SHA256s are already in releases.<channel>.json.
           path: |
             ${{ runner.temp }}/native-work/*
-            ${{ runner.temp }}/vidra-smoke/dist/release/*.json
-            ${{ runner.temp }}/vidra-smoke/dist/release/RELEASES*
-            ${{ runner.temp }}/vidra-smoke/dist/release/*delta.nupkg
+            ${{ runner.temp }}/vidra-smoke/dist/feed/*.json
+            ${{ runner.temp }}/vidra-smoke/dist/feed/RELEASES*
+            ${{ runner.temp }}/vidra-smoke/dist/feed/*delta.nupkg
+          if-no-files-found: ignore
+
+      # Uploaded even on failure, since a broken installer is worth inspecting.
+      # Staying lenient here is deliberate: the strict gate is the
+      # "Verify a distributable artifact was produced" step above, which asserts
+      # exactly one artifact of the expected type. Making the upload strict too
+      # would bury an earlier real failure under a second, confusing one.
+      #
+      # Named globs rather than `dist/*`: the feed directory now lives under
+      # `dist/` too, and it holds a 94 MB package that is already uploaded above.
+      - name: Upload packaged installer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vidra-installer-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/vidra-smoke/dist/*.dmg
+            ${{ runner.temp }}/vidra-smoke/dist/*.exe
+            ${{ runner.temp }}/vidra-smoke/dist/*.zip
           if-no-files-found: ignore

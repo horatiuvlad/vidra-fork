@@ -15,10 +15,7 @@
   },
   "vidra": {
     "updates": {
-      "feedUrl": "",
-      "native": {
-        "feedUrl": ""
-      }
+      "feed": ""
     }
   }
 }

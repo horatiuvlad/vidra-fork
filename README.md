@@ -167,7 +167,7 @@ Full pipeline and C# → TS type mapping: **[Type safety & codegen →](docs/arc
 
 | Package | Description |
 |---------|-------------|
-| [`create-vidra-app`](https://www.npmjs.com/package/create-vidra-app) | Scaffolder + the `vidra` CLI (dev / run / build / doctor) |
+| [`create-vidra-app`](https://www.npmjs.com/package/create-vidra-app) | Scaffolder + the `vidra` CLI (dev / run / build / updates / doctor) |
 | [`@vidra-dev/sdk`](https://www.npmjs.com/package/@vidra-dev/sdk) | Framework-agnostic runtime plus generated native/event proxies |
 | `Vidra.Updates` | Web-bundle updates (used by `Vidra.Hosting.Maui`) |
 | `Vidra.Updates.Native` | Whole-app updates via Velopack, including the Mac Catalyst locator Velopack does not ship |

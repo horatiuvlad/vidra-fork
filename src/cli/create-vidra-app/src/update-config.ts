@@ -1,59 +1,34 @@
 import path from "node:path";
 import fs from "fs-extra";
+import { manifestUrlFor, resolveFeedUri, withChannel } from "./feed-uri.js";
 
 /**
  * The `vidra.updates` block of an app's own `package.json` — the single place a
  * developer configures updates, next to the version the same file already owns.
  *
  * ```json
- * { "vidra": { "updates": {
- *     "feedUrl": "https://updates.example.com/bundles.json",
- *     "native": { "feedUrl": "https://updates.example.com/app/" }
- * } } }
+ * { "vidra": { "updates": { "feed": "https://updates.example.com/notes/" } } }
  * ```
  *
  * **A feed URL is the feature flag.** Every scaffolded app ships the whole
  * updater — both tiers wired, Velopack referenced, the entry points live — and
- * every part of it resolves to nothing until a URL says otherwise. There is no
- * second switch to forget: `feedUrl` turns the web-bundle tier on, and
- * `native.feedUrl` turns the whole-app tier on, at build time and at runtime
- * alike.
+ * both switches sit in `package.json` already, blank. Filling one in is the
+ * entire opt-in.
  *
- * `vidra build` stamps this block into the app as `vidra-updates.json`, which
- * the host reads at startup. Write it with `vidra updates init`.
+ * Three keys, and only the first is required. Everything that varies per
+ * *artifact* rather than per app — the channel, above all — is a build input,
+ * because the same commit must be able to produce a stable build and a beta one.
  */
-/**
- * The `native` sub-block: Velopack's half of the same surface.
- *
- * One `vidra.updates` block configures both tiers, and one prefix can serve
- * both: `releases.{channel}.json` and `bundles.json` never collide. The two
- * feeds are separate fields anyway, because the OTA one names a file
- * (`.../bundles.json`) and Velopack's names the directory it writes into.
- */
-export interface NativeUpdateConfig {
-  /** Base URL of the directory `vpk pack` writes into. */
-  feedUrl?: string;
-  /**
-   * Velopack's channel, not Vidra's. Unset means Velopack's own default for the
-   * platform: `win` / `osx`, the names `vpk pack` puts in
-   * `releases.{channel}.json`.
-   */
-  channel?: string;
-  enabled?: boolean;
-  /**
-   * Velopack's application id: the name of its install directory and the key
-   * its feed is written under. Defaults to the host project's
-   * `<ApplicationId>`, which is the app id the developer already chose.
-   */
-  packId?: string;
-}
-
 export interface UpdateConfig {
-  feedUrl?: string;
-  channel?: string;
-  enabled?: boolean;
-  /** Native (whole-app) updates. Absent means this app ships them the usual way. */
-  native?: NativeUpdateConfig;
+  /**
+   * A directory, not a file. One string serves both tiers; the object form
+   * splits them when the payloads live on different hosts.
+   *
+   * The web tier appends `bundles.json`; whole-app releases use the directory
+   * as-is. An empty string means that tier is off, which is the shape a fresh
+   * scaffold ships.
+   */
+  feed?: string | FeedSplit;
   /**
    * Base64 SPKI public keys the app will accept a manifest from. More than one
    * so a key can be rotated: publish under the new key while installed apps
@@ -63,105 +38,77 @@ export interface UpdateConfig {
    * refuses an unsigned feed, which is the whole point.
    */
   publicKeys?: string[];
+  /** Master switch. Absent means on, since a feed URL is what turns anything on. */
+  enabled?: boolean;
+}
+
+/** The two tiers, when their payloads do not share a host. */
+export interface FeedSplit {
+  /** Web bundles: your `ui/` build, applied on the next launch. */
+  web?: string;
+  /** Whole-app releases, via Velopack. */
+  app?: string;
 }
 
 /** The name the host looks for, as a MAUI app-package asset. */
 export const UPDATE_CONFIG_FILE = "vidra-updates.json";
 
-/** Which tiers a config turns on. Absent config means neither. */
-export interface UpdateTiers {
-  /** Web-bundle (OTA) updates: `vidra bundle` publishes them, the app checks. */
-  ota: boolean;
-  /** Whole-app updates: `vidra build` packs a release, the app checks. */
-  native: boolean;
+/** One tier, resolved against a channel and ready to be written down. */
+export interface ResolvedFeed {
+  /** What `package.json` said, unresolved. Reported, never fetched. */
+  uri: string;
+  /** The public base every payload of this tier sits under, channel included. */
+  base: string;
+}
+
+export interface ResolvedFeeds {
+  web: ResolvedFeed | null;
+  app: ResolvedFeed | null;
+  /** True when both tiers resolve to the same place, so one directory serves both. */
+  shared: boolean;
 }
 
 /**
- * The one rule the whole feature turns on: **a tier is on when it has a feed
- * URL, and off when it does not.**
+ * Settles where each tier publishes, for one build.
  *
- * `enabled: false` is the explicit off switch, kept beside the URL so a feed can
- * be silenced for a release without losing it. Each tier owns its own — the
- * top-level one sits beside the top-level `feedUrl` and means that feed, and
- * `native.enabled` means the native one. Neither reaches across, because a
- * switch that turns off something in another block is a switch people misread.
- *
- * The same rule runs on the other side, in C#: `VidraUpdateService` refuses to
- * check without a feed, and `NativeUpdateConfig.Resolve` defaults `Enabled` to
- * true so presence is all that is ever needed. This function exists so the CLI
- * reaches the same verdict as the app, from the same fields.
+ * The channel is a **path segment**, not a label: `<feed>/beta/`. That is what
+ * lets each channel own its own `bundles.json` and its own
+ * `releases.{platform}.json`, and it is why nothing here has to reason about
+ * matching rules or platform-suffixed channel names.
  */
-export const enabledTiers = (config: UpdateConfig | null): UpdateTiers => ({
-  ota: !!config?.feedUrl && config.enabled !== false,
-  native: !!config?.native?.feedUrl && config.native.enabled !== false,
-});
-
-/**
- * What state the app's `vidra.updates` block is in, which is a different
- * question from what {@link readUpdateConfig} could make of it.
- *
- * - `absent` — no block. The app removed it, or predates the template that
- *   ships one.
- * - `untouched` — the block is there and every value in it is blank: the shape
- *   a fresh scaffold has, waiting for a URL. Says nothing, wants nothing.
- * - `edited` — somebody put something in it.
- *
- * The distinction exists for one reason. `{ "feedURL": "…" }` parses to nothing
- * usable, so `readUpdateConfig` returns null — indistinguishable from an app
- * that wants no updates, except that somebody clearly typed something. Only
- * `vidra doctor` is in a position to notice, and it can only notice by looking
- * at the raw block. (Pre-writing the keys makes that typo much harder to make;
- * it does not make it impossible, and a `feedUrl` filled in beside a
- * `channel` that turns nothing on looks the same.)
- */
-export type UpdateBlockState = "absent" | "untouched" | "edited";
-
-export const readUpdateBlockState = (projectRoot: string): UpdateBlockState => {
-  let updates: unknown;
-  try {
-    const pkg = fs.readJsonSync(path.join(projectRoot, "package.json")) as {
-      vidra?: { updates?: unknown };
-    };
-    updates = pkg?.vidra?.updates;
-  } catch {
-    return "absent";
+export const resolveFeeds = (
+  config: UpdateConfig | null,
+  channel: string | null = null,
+): ResolvedFeeds => {
+  if (!config || config.enabled === false) {
+    return { web: null, app: null, shared: false };
   }
 
-  if (!updates || typeof updates !== "object") return "absent";
-  return isBlank(updates) ? "untouched" : "edited";
-};
+  const resolve = (uri: string | undefined): ResolvedFeed | null => {
+    if (typeof uri !== "string" || uri.trim().length === 0) return null;
+    return { uri: uri.trim(), base: withChannel(resolveFeedUri(uri), channel) };
+  };
 
-/** True for `""`, `[]`, `{}`, and any nesting of those. `false` is not blank. */
-const isBlank = (value: unknown): boolean => {
-  if (typeof value === "string") return value.trim().length === 0;
-  if (Array.isArray(value)) return value.every(isBlank);
-  if (value && typeof value === "object") return Object.values(value).every(isBlank);
-  return false;
+  const feed = config.feed;
+  const web = resolve(typeof feed === "string" ? feed : feed?.web);
+  const app = resolve(typeof feed === "string" ? feed : feed?.app);
+
+  return { web, app, shared: !!web && !!app && web.base === app.base };
 };
 
 export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {
-  const pkgPath = path.join(projectRoot, "package.json");
-  if (!fs.existsSync(pkgPath)) return null;
+  const raw = readUpdateBlock(projectRoot);
+  if (!raw) return null;
 
-  let pkg: unknown;
-  try {
-    pkg = fs.readJsonSync(pkgPath);
-  } catch {
-    return null;
-  }
-
-  const updates = (pkg as { vidra?: { updates?: unknown } })?.vidra?.updates;
-  if (!updates || typeof updates !== "object") return null;
-
-  const raw = updates as Record<string, unknown>;
   const config: UpdateConfig = {};
 
-  if (typeof raw.feedUrl === "string" && raw.feedUrl.trim().length > 0) {
-    config.feedUrl = raw.feedUrl.trim();
+  if (typeof raw.feed === "string" && raw.feed.trim().length > 0) {
+    config.feed = raw.feed.trim();
+  } else if (raw.feed && typeof raw.feed === "object") {
+    const split = readFeedSplit(raw.feed as Record<string, unknown>);
+    if (split) config.feed = split;
   }
-  if (typeof raw.channel === "string" && raw.channel.trim().length > 0) {
-    config.channel = raw.channel.trim();
-  }
+
   if (typeof raw.enabled === "boolean") {
     config.enabled = raw.enabled;
   }
@@ -177,35 +124,91 @@ export const readUpdateConfig = (projectRoot: string): UpdateConfig | null => {
     config.publicKeys = keys.map((key) => key.trim());
   }
 
-  const native = readNativeConfig(raw.native);
-  if (native) {
-    config.native = native;
-  }
-
   // A block with nothing usable in it is the same as no block: better to ship no
   // config file than one that configures nothing.
   return Object.keys(config).length > 0 ? config : null;
 };
 
-const readNativeConfig = (raw: unknown): NativeUpdateConfig | null => {
-  if (!raw || typeof raw !== "object") return null;
-
-  const source = raw as Record<string, unknown>;
-  const native: NativeUpdateConfig = {};
-
-  const text = (key: keyof NativeUpdateConfig): void => {
-    const value = source[key];
+const readFeedSplit = (raw: Record<string, unknown>): FeedSplit | null => {
+  const split: FeedSplit = {};
+  for (const key of ["web", "app"] as const) {
+    const value = raw[key];
     if (typeof value === "string" && value.trim().length > 0) {
-      native[key] = value.trim() as never;
+      split[key] = value.trim();
     }
-  };
+  }
+  return Object.keys(split).length > 0 ? split : null;
+};
 
-  text("feedUrl");
-  text("channel");
-  text("packId");
-  if (typeof source.enabled === "boolean") native.enabled = source.enabled;
+/**
+ * What state the app's `vidra.updates` block is in, which is a different
+ * question from what {@link readUpdateConfig} could make of it.
+ *
+ * - `absent` — no block. The app removed it, or predates the template.
+ * - `untouched` — the block is there and every value in it is blank: the shape
+ *   a fresh scaffold ships, waiting for a URL. Says nothing, wants nothing.
+ * - `edited` — somebody put something in it.
+ *
+ * The distinction exists for one reason. `{ "feedUrl": "…" }` parses to nothing
+ * usable, so `readUpdateConfig` returns null — indistinguishable from an app
+ * that wants no updates, except that somebody clearly typed something. Only
+ * `vidra doctor` is in a position to notice.
+ */
+export type UpdateBlockState = "absent" | "untouched" | "edited";
 
-  return Object.keys(native).length > 0 ? native : null;
+export const readUpdateBlockState = (projectRoot: string): UpdateBlockState => {
+  const raw = readUpdateBlock(projectRoot);
+  if (!raw) return "absent";
+  return isBlank(raw) ? "untouched" : "edited";
+};
+
+/** The raw `vidra.updates` object, unvalidated, or null when there is none. */
+const readUpdateBlock = (projectRoot: string): Record<string, unknown> | null => {
+  try {
+    const pkg = fs.readJsonSync(path.join(projectRoot, "package.json")) as {
+      vidra?: { updates?: unknown };
+    };
+    const updates = pkg?.vidra?.updates;
+    return updates && typeof updates === "object" ? (updates as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** True for `""`, `[]`, `{}`, and any nesting of those. `false` is not blank. */
+const isBlank = (value: unknown): boolean => {
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.every(isBlank);
+  if (value && typeof value === "object") return Object.values(value).every(isBlank);
+  return false;
+};
+
+/**
+ * The document `vidra build` stamps into the app, and the only update config
+ * the running app ever sees.
+ *
+ * Deliberately a different shape from `package.json`. **That file describes the
+ * app; this one describes one build of it** — fully resolved URLs, the channel
+ * already folded into them, and nothing the app has no business carrying.
+ */
+export interface StampedConfig {
+  feedUrl?: string;
+  publicKeys?: string[];
+  native?: { feedUrl: string };
+}
+
+export const stampedConfigFor = (
+  config: UpdateConfig | null,
+  feeds: ResolvedFeeds,
+): StampedConfig | null => {
+  const stamped: StampedConfig = {};
+
+  if (feeds.web) stamped.feedUrl = manifestUrlFor(feeds.web.base);
+  if (feeds.app) stamped.native = { feedUrl: feeds.app.base };
+  if (config?.publicKeys?.length) stamped.publicKeys = [...config.publicKeys];
+
+  // Keys alone configure nothing: without a feed there is nothing to verify.
+  return stamped.feedUrl || stamped.native ? stamped : null;
 };
 
 /**
@@ -215,7 +218,7 @@ const readNativeConfig = (raw: unknown): NativeUpdateConfig | null => {
  */
 export const stampUpdateConfig = (
   hostDir: string,
-  config: UpdateConfig | null,
+  config: StampedConfig | null,
 ): string | null => {
   const target = path.join(hostDir, "Resources", "Raw", UPDATE_CONFIG_FILE);
 
@@ -231,19 +234,15 @@ export const stampUpdateConfig = (
 
 /** What {@link writeUpdateConfig} may set. `null` removes a key. */
 export interface UpdateConfigPatch {
-  feedUrl?: string | null;
-  channel?: string | null;
+  feed?: string | FeedSplit | null;
   publicKeys?: string[] | null;
-  native?: Partial<NativeUpdateConfig> | null;
 }
 
 /**
  * Merges a patch into the app's `vidra.updates` block, in place.
  *
  * A merge rather than a write: `publicKeys` may already be there from
- * `vidra keygen`, the native block may already have a `packId`, and a command
- * that adds a feed URL must not quietly drop either. Keys set to `null` are
- * removed, which is how a tier is turned back off.
+ * `vidra keygen`, and a command that adds a feed URL must not quietly drop it.
  *
  * The file's own indentation and trailing newline are preserved, because this
  * edits a file the developer owns and a diff full of reformatting is a diff
@@ -260,24 +259,14 @@ export const writeUpdateConfig = (
   const vidra = (pkg.vidra ??= {}) as Record<string, unknown>;
   const updates = (vidra.updates ??= {}) as Record<string, unknown>;
 
-  const apply = (target: Record<string, unknown>, key: string, next: unknown): void => {
+  const apply = (key: string, next: unknown): void => {
     if (next === undefined) return;
-    if (next === null) delete target[key];
-    else target[key] = next;
+    if (next === null) delete updates[key];
+    else updates[key] = next;
   };
 
-  apply(updates, "feedUrl", patch.feedUrl);
-  apply(updates, "channel", patch.channel);
-  apply(updates, "publicKeys", patch.publicKeys);
-
-  if (patch.native === null) {
-    delete updates.native;
-  } else if (patch.native) {
-    const native = (updates.native ??= {}) as Record<string, unknown>;
-    apply(native, "feedUrl", patch.native.feedUrl);
-    apply(native, "channel", patch.native.channel);
-    apply(native, "packId", patch.native.packId);
-  }
+  apply("feed", patch.feed);
+  apply("publicKeys", patch.publicKeys);
 
   fs.writeFileSync(pkgPath, serializeLike(source, pkg));
   return readUpdateConfig(projectRoot);

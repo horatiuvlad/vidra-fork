@@ -4,96 +4,182 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  enabledTiers,
   readUpdateBlockState,
   readUpdateConfig,
+  resolveFeeds,
+  stampedConfigFor,
   stampUpdateConfig,
   UPDATE_CONFIG_FILE,
   writeUpdateConfig,
 } from "../update-config.js";
 
+let work: string;
+
+beforeEach(() => {
+  work = nodeFs.mkdtempSync(path.join(os.tmpdir(), "vidra-update-config-"));
+});
+
+afterEach(() => {
+  nodeFs.rmSync(work, { recursive: true, force: true });
+});
+
+const write = (vidra: unknown): string => {
+  nodeFs.writeFileSync(path.join(work, "package.json"), JSON.stringify({ name: "notes", vidra }));
+  return work;
+};
+
 describe("readUpdateConfig", () => {
-  let work: string;
-
-  beforeEach(() => {
-    work = nodeFs.mkdtempSync(path.join(os.tmpdir(), "vidra-update-config-"));
+  it("reads one feed serving both tiers", () => {
+    expect(readUpdateConfig(write({ updates: { feed: "https://cdn/notes/" } }))).toEqual({
+      feed: "https://cdn/notes/",
+    });
   });
 
-  afterEach(() => {
-    nodeFs.rmSync(work, { recursive: true, force: true });
-  });
-
-  const write = (vidra: unknown): string => {
-    nodeFs.writeFileSync(path.join(work, "package.json"), JSON.stringify({ name: "notes", vidra }));
-    return work;
-  };
-
-  it("reads the native block beside the OTA one", () => {
+  it("reads the split form", () => {
     const config = readUpdateConfig(
-      write({
-        updates: {
-          feedUrl: "https://cdn.example.com/app/bundles.json",
-          native: { feedUrl: "https://cdn.example.com/app/", channel: "osx", packId: "com.example.notes" },
-        },
-      }),
+      write({ updates: { feed: { web: "https://cdn/notes/", app: "https://dl/notes/" } } }),
     );
 
-    expect(config?.feedUrl).toBe("https://cdn.example.com/app/bundles.json");
-    expect(config?.native).toEqual({
-      feedUrl: "https://cdn.example.com/app/",
-      channel: "osx",
-      packId: "com.example.notes",
+    expect(config?.feed).toEqual({ web: "https://cdn/notes/", app: "https://dl/notes/" });
+  });
+
+  it("keeps a split that names only one tier", () => {
+    expect(readUpdateConfig(write({ updates: { feed: { web: "https://cdn/" } } }))?.feed).toEqual({
+      web: "https://cdn/",
     });
-  });
-
-  /**
-   * Native updates without OTA is a legitimate configuration: an app that
-   * ships whole releases and no JS bundles. The block still has to be stamped,
-   * or the installed app has no feed to check.
-   */
-  it("keeps a config that only configures native updates", () => {
-    const config = readUpdateConfig(write({ updates: { native: { feedUrl: "https://cdn/" } } }));
-
-    expect(config).not.toBeNull();
-    expect(config?.native?.feedUrl).toBe("https://cdn/");
-    expect(config?.feedUrl).toBeUndefined();
-  });
-
-  it("reads an explicit off switch on the native block", () => {
-    expect(readUpdateConfig(write({ updates: { native: { enabled: false } } }))?.native).toEqual({
-      enabled: false,
-    });
-  });
-
-  it("ignores a native block with nothing usable in it", () => {
-    expect(readUpdateConfig(write({ updates: { native: { feedUrl: "   " } } }))).toBeNull();
-    expect(readUpdateConfig(write({ updates: { native: "yes" } }))).toBeNull();
   });
 
   it("trims what a hand-edited config leaves behind", () => {
-    const config = readUpdateConfig(write({ updates: { native: { feedUrl: "  https://cdn/  " } } }));
+    expect(readUpdateConfig(write({ updates: { feed: "  https://cdn/  " } }))?.feed).toBe(
+      "https://cdn/",
+    );
+  });
 
-    expect(config?.native?.feedUrl).toBe("https://cdn/");
+  /** The shape a fresh scaffold ships, and the shape a half-finished edit leaves. */
+  it("treats a blank feed as no configuration", () => {
+    expect(readUpdateConfig(write({ updates: { feed: "" } }))).toBeNull();
+    expect(readUpdateConfig(write({ updates: { feed: { web: "", app: "" } } }))).toBeNull();
+    expect(readUpdateConfig(write({ updates: {} }))).toBeNull();
+    expect(readUpdateConfig(work)).toBeNull();
+  });
+
+  it("reads a single publicKey and a publicKeys array", () => {
+    expect(
+      readUpdateConfig(write({ updates: { feed: "https://cdn/", publicKey: "AAA" } }))?.publicKeys,
+    ).toEqual(["AAA"]);
+    expect(
+      readUpdateConfig(write({ updates: { feed: "https://cdn/", publicKeys: ["A", "B"] } }))
+        ?.publicKeys,
+    ).toEqual(["A", "B"]);
+  });
+});
+
+/**
+ * The one rule the feature turns on. Everything else — the stamped file, the
+ * builder calls, the entry points, the package reference — ships in every app
+ * whatever this says.
+ */
+describe("resolveFeeds", () => {
+  it("is off for an app with no config at all", () => {
+    expect(resolveFeeds(null)).toEqual({ web: null, app: null, shared: false });
+  });
+
+  /** One string is one destination, which is what puts both tiers in one directory. */
+  it("points both tiers at one place, and says they are shared", () => {
+    const feeds = resolveFeeds({ feed: "https://cdn/notes/" });
+
+    expect(feeds.web?.base).toBe("https://cdn/notes/");
+    expect(feeds.app?.base).toBe("https://cdn/notes/");
+    expect(feeds.shared).toBe(true);
+  });
+
+  it("keeps two destinations apart", () => {
+    const feeds = resolveFeeds({ feed: { web: "https://cdn/notes/", app: "https://dl/notes/" } });
+
+    expect(feeds.web?.base).toBe("https://cdn/notes/");
+    expect(feeds.app?.base).toBe("https://dl/notes/");
+    expect(feeds.shared).toBe(false);
+  });
+
+  it("turns on only the half that has a URL", () => {
+    expect(resolveFeeds({ feed: { web: "https://cdn/" } }).app).toBeNull();
+    expect(resolveFeeds({ feed: { app: "https://dl/" } }).web).toBeNull();
+  });
+
+  /**
+   * A channel is a path segment, not a label. That is what gives each channel
+   * its own `bundles.json` and its own `releases.{platform}.json`, so nothing
+   * downstream needs matching rules or platform-suffixed channel names.
+   */
+  it("appends a channel as a path segment", () => {
+    const feeds = resolveFeeds({ feed: "https://cdn/notes/" }, "beta");
+
+    expect(feeds.web?.base).toBe("https://cdn/notes/beta/");
+    expect(feeds.app?.base).toBe("https://cdn/notes/beta/");
+  });
+
+  it("resolves a github shorthand for both tiers", () => {
+    const feeds = resolveFeeds({ feed: "github:acme/notes" }, "beta");
+
+    expect(feeds.web?.base).toBe("https://github.com/acme/notes/releases/download/updates/beta/");
+  });
+
+  /** The master switch, kept beside the URL so a feed can be silenced without losing it. */
+  it("reports nothing when updates are switched off", () => {
+    expect(resolveFeeds({ feed: "https://cdn/", enabled: false })).toEqual({
+      web: null,
+      app: null,
+      shared: false,
+    });
+  });
+
+  it("reports what package.json said, unresolved, for the developer to recognise", () => {
+    expect(resolveFeeds({ feed: "github:acme/notes" }).web?.uri).toBe("github:acme/notes");
+  });
+});
+
+/**
+ * `package.json` describes the app; this file describes one build of it. The
+ * shapes differ on purpose: what is stamped is fully resolved, with the channel
+ * already folded in and nothing the app has no business carrying.
+ */
+describe("stampedConfigFor", () => {
+  it("writes absolute URLs the app can fetch without resolving anything", () => {
+    const config = { feed: "github:acme/notes" };
+
+    expect(stampedConfigFor(config, resolveFeeds(config, "beta"))).toEqual({
+      feedUrl: "https://github.com/acme/notes/releases/download/updates/beta/bundles.json",
+      native: { feedUrl: "https://github.com/acme/notes/releases/download/updates/beta/" },
+    });
+  });
+
+  it("carries the trusted keys, since the app is what enforces them", () => {
+    const config = { feed: "https://cdn/", publicKeys: ["AAA"] };
+
+    expect(stampedConfigFor(config, resolveFeeds(config))?.publicKeys).toEqual(["AAA"]);
+  });
+
+  it("stamps only the tier that is on", () => {
+    const config = { feed: { web: "https://cdn/" } };
+    const stamped = stampedConfigFor(config, resolveFeeds(config));
+
+    expect(stamped?.feedUrl).toBe("https://cdn/bundles.json");
+    expect(stamped?.native).toBeUndefined();
+  });
+
+  /** Keys alone configure nothing: without a feed there is nothing to verify. */
+  it("is null when no tier is on, so nothing is shipped", () => {
+    const config = { publicKeys: ["AAA"] };
+    expect(stampedConfigFor(config, resolveFeeds(config))).toBeNull();
   });
 });
 
 describe("stampUpdateConfig", () => {
-  let work: string;
-
-  beforeEach(() => {
-    work = nodeFs.mkdtempSync(path.join(os.tmpdir(), "vidra-stamp-"));
-  });
-
-  afterEach(() => {
-    nodeFs.rmSync(work, { recursive: true, force: true });
-  });
-
-  /**
-   * One stamped file carries both tiers, which is why the C# side looks for
-   * its settings under `native` rather than in a second file.
-   */
-  it("writes the native block into the file the host reads", () => {
-    stampUpdateConfig(work, { feedUrl: "https://cdn/bundles.json", native: { feedUrl: "https://cdn/" } });
+  it("writes the document the host reads", () => {
+    stampUpdateConfig(work, {
+      feedUrl: "https://cdn/bundles.json",
+      native: { feedUrl: "https://cdn/" },
+    });
 
     const written = JSON.parse(
       nodeFs.readFileSync(path.join(work, "Resources", "Raw", UPDATE_CONFIG_FILE), "utf-8"),
@@ -101,92 +187,79 @@ describe("stampUpdateConfig", () => {
 
     expect(written.native).toEqual({ feedUrl: "https://cdn/" });
   });
+
+  /**
+   * An app that had a feed and no longer does must not keep shipping the old
+   * one because the file happened to survive in `Resources/Raw`.
+   */
+  it("removes a stale config rather than leaving it behind", () => {
+    const target = path.join(work, "Resources", "Raw", UPDATE_CONFIG_FILE);
+    stampUpdateConfig(work, { feedUrl: "https://cdn/bundles.json" });
+    expect(nodeFs.existsSync(target)).toBe(true);
+
+    stampUpdateConfig(work, null);
+    expect(nodeFs.existsSync(target)).toBe(false);
+  });
 });
 
 /**
- * The one rule the feature turns on. Everything else — the stamped file, the
- * builder calls, the entry points, the package reference — ships in every app
- * whatever this says; these two booleans are the difference between an app that
- * checks and an app that does not.
+ * Every scaffolded app ships the block with the switch spelled correctly and
+ * empty, so "there is a block" stopped being a signal — what somebody typed
+ * into it is.
  */
-describe("enabledTiers", () => {
-  it("is off for an app with no config at all", () => {
-    expect(enabledTiers(null)).toEqual({ ota: false, native: false });
+describe("readUpdateBlockState", () => {
+  it("is absent for an app with no block, or no package.json", () => {
+    nodeFs.writeFileSync(path.join(work, "package.json"), JSON.stringify({ name: "notes" }));
+    expect(readUpdateBlockState(work)).toBe("absent");
+    expect(readUpdateBlockState(path.join(work, "nowhere"))).toBe("absent");
   });
 
-  it("turns each tier on with its own feed URL", () => {
-    expect(enabledTiers({ feedUrl: "https://cdn/bundles.json" })).toEqual({
-      ota: true,
-      native: false,
-    });
-    expect(enabledTiers({ native: { feedUrl: "https://cdn/" } })).toEqual({
-      ota: false,
-      native: true,
-    });
+  it("is untouched for exactly what the template ships", () => {
+    expect(readUpdateBlockState(write({ updates: { feed: "" } }))).toBe("untouched");
+    expect(readUpdateBlockState(write({ updates: { feed: { web: "", app: "" } } }))).toBe(
+      "untouched",
+    );
   });
 
-  it("is on for both when both are configured", () => {
-    expect(
-      enabledTiers({ feedUrl: "https://cdn/bundles.json", native: { feedUrl: "https://cdn/" } }),
-    ).toEqual({ ota: true, native: true });
+  it("treats whitespace as untouched, since that is what a stray keystroke leaves", () => {
+    expect(readUpdateBlockState(write({ updates: { feed: "   " } }))).toBe("untouched");
   });
 
-  /**
-   * A block with everything but the URL is the shape a typo produces, and it
-   * has to read as off — otherwise `vidra build` would pack a release nobody
-   * could find.
-   */
-  it("is off when the block exists but names no feed", () => {
-    expect(enabledTiers({ channel: "stable", native: { channel: "osx" } })).toEqual({
-      ota: false,
-      native: false,
-    });
+  it("is edited as soon as a feed has a URL", () => {
+    expect(readUpdateBlockState(write({ updates: { feed: "https://cdn/" } }))).toBe("edited");
   });
 
-  /** `enabled: false` silences a feed without losing the URL. */
-  it("respects each tier's own off switch", () => {
-    expect(
-      enabledTiers({
-        feedUrl: "https://cdn/bundles.json",
-        enabled: false,
-        native: { feedUrl: "https://cdn/" },
-      }),
-    ).toEqual({ ota: false, native: true });
+  /** The case the whole tri-state exists for: typed into, and still off. */
+  it("is edited for a misspelled key, which is how doctor can see one", () => {
+    expect(readUpdateBlockState(write({ updates: { feedUrl: "https://cdn/b.json" } }))).toBe(
+      "edited",
+    );
+  });
 
-    expect(
-      enabledTiers({
-        feedUrl: "https://cdn/bundles.json",
-        native: { feedUrl: "https://cdn/", enabled: false },
-      }),
-    ).toEqual({ ota: true, native: false });
+  /** `false` is a decision, not an empty field. */
+  it("is edited when updates were deliberately switched off", () => {
+    expect(readUpdateBlockState(write({ updates: { enabled: false } }))).toBe("edited");
   });
 });
 
 describe("writeUpdateConfig", () => {
-  let work: string;
-
-  beforeEach(() => {
-    work = nodeFs.mkdtempSync(path.join(os.tmpdir(), "vidra-write-config-"));
-  });
-
-  afterEach(() => {
-    nodeFs.rmSync(work, { recursive: true, force: true });
-  });
-
   const pkg = (contents: object): string => {
     nodeFs.writeFileSync(path.join(work, "package.json"), `${JSON.stringify(contents, null, 2)}\n`);
     return work;
   };
 
-  const read = (): Record<string, any> =>
+  const read = (): Record<string, unknown> =>
     JSON.parse(nodeFs.readFileSync(path.join(work, "package.json"), "utf-8"));
 
-  it("creates the block in an app that has never configured updates", () => {
-    writeUpdateConfig(pkg({ name: "notes", version: "1.0.0" }), {
-      feedUrl: "https://cdn/bundles.json",
+  const updates = (): Record<string, unknown> =>
+    (read().vidra as { updates: Record<string, unknown> }).updates;
+
+  it("fills in the blank field a scaffold ships", () => {
+    writeUpdateConfig(pkg({ name: "notes", vidra: { updates: { feed: "" } } }), {
+      feed: "https://cdn/notes/",
     });
 
-    expect(read().vidra.updates).toEqual({ feedUrl: "https://cdn/bundles.json" });
+    expect(updates()).toEqual({ feed: "https://cdn/notes/" });
   });
 
   /**
@@ -195,24 +268,19 @@ describe("writeUpdateConfig", () => {
    * the feed trustworthy.
    */
   it("keeps everything it was not asked to change", () => {
-    writeUpdateConfig(
-      pkg({
-        name: "notes",
-        vidra: { updates: { publicKeys: ["k"], native: { packId: "com.example.notes" } } },
-      }),
-      { feedUrl: "https://cdn/bundles.json", native: { feedUrl: "https://cdn/" } },
-    );
+    writeUpdateConfig(pkg({ name: "notes", vidra: { updates: { publicKeys: ["k"] } } }), {
+      feed: { web: "https://cdn/", app: "https://dl/" },
+    });
 
-    expect(read().vidra.updates).toEqual({
+    expect(updates()).toEqual({
       publicKeys: ["k"],
-      native: { packId: "com.example.notes", feedUrl: "https://cdn/" },
-      feedUrl: "https://cdn/bundles.json",
+      feed: { web: "https://cdn/", app: "https://dl/" },
     });
   });
 
   it("leaves the rest of package.json alone", () => {
     writeUpdateConfig(pkg({ name: "notes", version: "2.1.0", scripts: { dev: "vidra dev" } }), {
-      feedUrl: "https://cdn/bundles.json",
+      feed: "https://cdn/",
     });
 
     const after = read();
@@ -221,16 +289,12 @@ describe("writeUpdateConfig", () => {
     expect(after.scripts).toEqual({ dev: "vidra dev" });
   });
 
-  /** Turning a tier back off, without hand-editing JSON. */
   it("removes a key set to null", () => {
-    const root = pkg({
-      name: "notes",
-      vidra: { updates: { feedUrl: "https://cdn/b.json", native: { feedUrl: "https://cdn/" } } },
+    writeUpdateConfig(pkg({ name: "notes", vidra: { updates: { feed: "https://cdn/" } } }), {
+      feed: null,
     });
 
-    writeUpdateConfig(root, { native: null });
-
-    expect(read().vidra.updates).toEqual({ feedUrl: "https://cdn/b.json" });
+    expect(updates()).toEqual({});
   });
 
   /** This edits a file the developer owns; a reformatting diff is a diff nobody reads. */
@@ -240,7 +304,7 @@ describe("writeUpdateConfig", () => {
       `${JSON.stringify({ name: "notes" }, null, 4)}\n`,
     );
 
-    writeUpdateConfig(work, { feedUrl: "https://cdn/bundles.json" });
+    writeUpdateConfig(work, { feed: "https://cdn/" });
 
     const raw = nodeFs.readFileSync(path.join(work, "package.json"), "utf-8");
     expect(raw).toContain('\n    "vidra"');
@@ -248,73 +312,8 @@ describe("writeUpdateConfig", () => {
   });
 
   it("hands back the config the app will actually read", () => {
-    const config = writeUpdateConfig(pkg({ name: "notes" }), {
-      feedUrl: "  https://cdn/bundles.json  ",
-    });
-
-    expect(config?.feedUrl).toBe("https://cdn/bundles.json");
-  });
-});
-
-/**
- * Every scaffolded app ships the block with both switches spelled correctly and
- * empty, so "there is a block" stopped being a signal — what somebody typed
- * into it is.
- */
-describe("readUpdateBlockState", () => {
-  let work: string;
-
-  beforeEach(() => {
-    work = nodeFs.mkdtempSync(path.join(os.tmpdir(), "vidra-block-state-"));
-  });
-
-  afterEach(() => {
-    nodeFs.rmSync(work, { recursive: true, force: true });
-  });
-
-  const write = (contents: object): string => {
-    nodeFs.writeFileSync(path.join(work, "package.json"), JSON.stringify(contents, null, 2));
-    return work;
-  };
-
-  it("is absent for an app with no block", () => {
-    expect(readUpdateBlockState(write({ name: "notes" }))).toBe("absent");
-  });
-
-  it("is absent when there is no package.json to read", () => {
-    expect(readUpdateBlockState(path.join(work, "nowhere"))).toBe("absent");
-  });
-
-  it("is untouched for exactly what the template ships", () => {
-    expect(
-      readUpdateBlockState(write({ vidra: { updates: { feedUrl: "", native: { feedUrl: "" } } } })),
-    ).toBe("untouched");
-  });
-
-  it("treats whitespace as untouched, since that is what a stray keystroke leaves", () => {
-    expect(readUpdateBlockState(write({ vidra: { updates: { feedUrl: "   " } } }))).toBe(
-      "untouched",
+    expect(writeUpdateConfig(pkg({ name: "notes" }), { feed: "  https://cdn/  " })?.feed).toBe(
+      "https://cdn/",
     );
-  });
-
-  it("is edited as soon as either switch has a URL", () => {
-    expect(
-      readUpdateBlockState(write({ vidra: { updates: { feedUrl: "https://cdn/b.json" } } })),
-    ).toBe("edited");
-    expect(
-      readUpdateBlockState(write({ vidra: { updates: { native: { feedUrl: "https://cdn/" } } } })),
-    ).toBe("edited");
-  });
-
-  /** The case the whole tri-state exists for: typed into, and still off. */
-  it("is edited for a misspelled key, which is how doctor can see one", () => {
-    expect(
-      readUpdateBlockState(write({ vidra: { updates: { feedURL: "https://cdn/b.json" } } })),
-    ).toBe("edited");
-  });
-
-  /** `false` is a decision, not an empty field. */
-  it("is edited when a tier was deliberately switched off", () => {
-    expect(readUpdateBlockState(write({ vidra: { updates: { enabled: false } } }))).toBe("edited");
   });
 });

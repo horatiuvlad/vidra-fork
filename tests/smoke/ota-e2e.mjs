@@ -163,9 +163,14 @@ process.exit(failures === 0 ? 0 : 1);
 // ------------------------------------------------------------------ helpers --
 
 /**
- * Publishes the bundle under test with `vidra bundle` — the command a real
+ * Publishes the bundle under test with `vidra build --web` — the command a real
  * publisher runs — after marking `ui/dist` so the loaded page can be identified,
  * and bumping the version so it outranks what the app shipped with.
+ *
+ * The output directory is not passed: it is derived from the app's own
+ * `vidra.updates.feed`, which the rig points at this scratch feed. Publishing
+ * somewhere the app is not reading from is the failure that costs a release, so
+ * the two are one setting rather than two.
  */
 function publishGoodBundle() {
   const dist = path.join(project, "ui", "dist");
@@ -183,9 +188,15 @@ function publishGoodBundle() {
 
   run(
     "node",
-    [cli, "bundle", "--skip-build", "--out", feed, ...(signingKey ? ["--sign", signingKey] : [])],
+    [cli, "build", "--web", ...(signingKey ? ["--sign", signingKey] : [])],
     project,
   );
+
+  // `--web` writes into the layout's feed directory; the rig serves its own, so
+  // move what was produced. Copying rather than pointing the app at dist/ keeps
+  // the "feed edited behind the app's back" cases below working on files nothing
+  // else rewrites.
+  fs.cpSync(path.join(project, "dist", "feed"), feed, { recursive: true });
 
   const manifest = readManifest();
   const entry = manifest.bundles.at(-1);

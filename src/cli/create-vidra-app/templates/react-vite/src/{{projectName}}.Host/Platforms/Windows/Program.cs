@@ -13,8 +13,8 @@
 //
 // It is live from the first scaffold and does nothing at all until this app is
 // installed from a Velopack release — which it is not, until `package.json`'s
-// `vidra.updates.native.feedUrl` (already there, empty) names a feed and
-// `vidra build` packs one. Filling in that URL is the whole opt-in.
+// `vidra.updates.feed` (already there, empty) names one and `vidra build` packs
+// a release into it. Filling in that URL is the whole opt-in.
 
 using Velopack;
 using Vidra.Hosting;

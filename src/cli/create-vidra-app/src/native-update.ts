@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "fs-extra";
 import { execFileSync } from "node:child_process";
-import type { NativeUpdateConfig } from "./update-config.js";
+import type { ResolvedFeed } from "./update-config.js";
 import {
   downloadArgs,
   findMacMainExe,
@@ -25,9 +25,6 @@ import { resolveWindowsSigningConfig, timestampUrl } from "./windows-signing.js"
  * already resolved.
  */
 
-/** Where the native feed lands, relative to the project root. */
-export const RELEASE_DIR = path.join("dist", "release");
-
 /**
  * `vpk` rejects `--signEntitlements` unless the file name ends in
  * `.entitlements`, and the MacCatalyst SDK requires the file to be called
@@ -41,35 +38,43 @@ export interface NativeUpdateSettings {
   packVersion: string;
   /** Never null: a feed URL is what turned this tier on in the first place. */
   feedUrl: string;
-  channel: string | null;
+  /** Absolute directory this release is packed into, from the dist layout. */
+  releaseDir: string;
 }
 
 /**
  * Settles what `vpk pack` is being asked to produce.
  *
- * Only ever called for a config `enabledTiers()` says has native updates on, so
- * the feed URL is a given rather than a thing to check for: there is no
- * half-configured state left where a release is packed that no app can find.
+ * Only ever called for a config whose app tier resolved to a feed, so the URL is
+ * a given rather than a thing to check for: there is no half-configured state
+ * left where a release is packed that no installed app can find.
  *
  * The pack id is the app id the developer already chose: it names Velopack's
  * install directory (`%LOCALAPPDATA%\<packId>\`) and keys its feed, so deriving
  * it from `<ApplicationId>` keeps one identity rather than introducing a second
  * one nobody would remember to keep in step.
+ *
+ * **Velopack is never handed a channel.** Each Vidra channel is a directory on
+ * both sides, so every one gets its own `releases.{platform}.json` under
+ * Velopack's default `win` / `osx` names. Overriding those is exactly what would
+ * collapse two platforms into one index.
  */
 export const resolveNativeUpdateSettings = (opts: {
-  config: NativeUpdateConfig & { feedUrl: string };
+  feed: ResolvedFeed;
+  /** Absolute, from the dist layout. */
+  releaseDir: string;
   csprojPath: string;
   projectName: string;
   version: string;
 }): NativeUpdateSettings => ({
-  packId: opts.config.packId ?? readApplicationId(opts.csprojPath) ?? opts.projectName,
+  packId: readApplicationId(opts.csprojPath) ?? opts.projectName,
   // Not cosmetic on macOS: `vpk pack` renames the bundle to
   // `<packTitle ?? packId>.app`, so without this the app a user drags to
   // /Applications is called `com.example.notes.app`.
   packTitle: readApplicationTitle(opts.csprojPath) ?? opts.projectName,
   packVersion: opts.version,
-  feedUrl: opts.config.feedUrl,
-  channel: opts.config.channel ?? null,
+  feedUrl: opts.feed.base,
+  releaseDir: opts.releaseDir,
 });
 
 /** `<ApplicationId>` out of the host csproj. */
@@ -165,7 +170,7 @@ export const runNativeUpdate = (opts: {
     );
   }
 
-  const releaseDir = path.join(opts.projectRoot, RELEASE_DIR);
+  const releaseDir = opts.settings.releaseDir;
   fs.ensureDirSync(releaseDir);
 
   const merged = mergeFromLiveFeed(vpk, opts.settings, releaseDir, opts.io);
@@ -188,7 +193,6 @@ export const runNativeUpdate = (opts: {
     packDir: opts.packDir,
     mainExe,
     outputDir: releaseDir,
-    channel: opts.settings.channel,
     ...(opts.target === "macos"
       ? {
           // Velopack has to own signing: it adds files to a sealed bundle
@@ -241,11 +245,7 @@ const mergeFromLiveFeed = (
 ): NativeUpdateOutcome["merged"] => {
   const result = runVpk(
     vpk,
-    downloadArgs({
-      feedUrl: settings.feedUrl,
-      outputDir: releaseDir,
-      channel: settings.channel,
-    }),
+    downloadArgs({ feedUrl: settings.feedUrl, outputDir: releaseDir }),
     { verbose: io.verbose },
   );
 
