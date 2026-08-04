@@ -35,6 +35,14 @@ const derived = [
     write: (s, v) => s.replace(/("version":\s*")[^"]+(")/, `$1${v}$2`),
   },
   {
+    // What `vidra --version` and the CLI banner print. It drifted once already
+    // (0.3.1 while the package said 0.4.0), because nothing checked it: a
+    // version the tool reports about itself has to be derived like every other.
+    file: "src/cli/create-vidra-app/src/theme.ts",
+    read: (s) => s.match(/CLI_VERSION = "([^"]+)"/)?.[1],
+    write: (s, v) => s.replace(/(CLI_VERSION = ")[^"]+(")/, `$1${v}$2`),
+  },
+  {
     // Every packable csproj resolves <Version> through this property, so the
     // .NET side has exactly one number rather than nine.
     file: "Directory.Build.props",

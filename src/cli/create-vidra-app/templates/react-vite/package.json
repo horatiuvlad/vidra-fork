@@ -12,5 +12,10 @@
   },
   "devDependencies": {
     "create-vidra-app": "{{cliVersion}}"
+  },
+  "vidra": {
+    "updates": {
+      "feed": ""
+    }
   }
 }

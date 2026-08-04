@@ -203,15 +203,26 @@ describe("newestPackVersion", () => {
 });
 
 /**
- * Every state below produces an app that builds cleanly and never updates. The
- * updater is silent by design when nothing is configured: an updater that
- * announces "no feed" on every launch of every app trains people to ignore the
- * line that matters, so this is the only place a typo can surface.
+ * A feed URL is the only switch, so these are the states it cannot describe:
+ * a block that turns nothing on, and an app scaffolded before the updater
+ * shipped live, whose own source is missing a part a package cannot retrofit.
+ * The updater is silent by design when nothing is configured, so this is the
+ * only place a typo can surface.
  */
 describe("diagnoseUpdateConfiguration", () => {
+  const EDITED = "edited" as const;
+  const WIRED = "builder.UseVidra().UseVidraUpdates().UseVidraNativeUpdates();";
+  const ENTRY_POINTS = {
+    MacCatalyst: "VelopackApp.Build().UseVidraLocator().Run();",
+    Windows: "VelopackApp.Build().UseVidraLocator().Run();",
+  };
+
   const clean = {
-    config: null,
-    mauiProgram: "builder.UseMauiApp<App>().UseVidra();",
+    config: null as Parameters<typeof diagnoseUpdateConfiguration>[0]["config"],
+    blockState: "absent" as const,
+    mauiProgram: WIRED,
+    csproj: '<PackageReference Include="Vidra.Updates.Native" Version="0.5.0" />',
+    entryPoints: ENTRY_POINTS,
     publishedUnsigned: false,
   };
 
@@ -222,26 +233,109 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(diagnoseUpdateConfiguration(clean)).toEqual([]);
   });
 
-  it("says nothing when both halves are present", () => {
+  /**
+   * Every scaffolded app ships the block, blank. Its presence is not a signal,
+   * and reporting it would fire on every fresh app.
+   */
+  it("says nothing about the blank block a fresh scaffold ships", () => {
+    expect(diagnoseUpdateConfiguration({ ...clean, blockState: "untouched" })).toEqual([]);
+  });
+
+  it("says nothing about a scaffolded app with a feed", () => {
+    expect(
+      diagnoseUpdateConfiguration({ ...clean, blockState: EDITED, config: { feed: "https://cdn/notes/" } }),
+    ).toEqual([]);
+  });
+
+  /**
+   * The mistake nothing else can catch. A misspelled `feedUrl` produces a
+   * `vidra.updates` block that reads, stamps, ships — and turns nothing on,
+   * which is indistinguishable at runtime from an app that wants no updates.
+   */
+  it("catches a block that turns nothing on", () => {
+    expect(names({ ...clean, blockState: EDITED, config: null })).toEqual(["Update feed"]);
+  });
+
+  it("says so plainly when a feed is switched off rather than missing", () => {
+    const [found] = diagnoseUpdateConfiguration({
+      ...clean,
+      blockState: EDITED,
+      config: { feed: "https://cdn/notes/", enabled: false },
+    });
+
+    expect(found.name).toBe("Update feed");
+    expect(found.detail).toContain("enabled: false");
+  });
+
+  /** A shorthand we do not ship would bake a wrong URL into every install. */
+  it("catches a feed it cannot resolve", () => {
+    const [found] = diagnoseUpdateConfiguration({
+      ...clean,
+      blockState: EDITED,
+      config: { feed: "s3://notes-updates/app/" },
+    });
+
+    expect(found.name).toBe("Update feed");
+    expect(found.detail).toContain("unknown feed scheme");
+  });
+
+  /** One tier on and the other off is an ordinary configuration, not a fault. */
+  it("says nothing about an app that only publishes web bundles", () => {
     expect(
       diagnoseUpdateConfiguration({
         ...clean,
-        config: { feedUrl: "https://cdn/bundles.json" },
-        mauiProgram: ".UseVidra().UseVidraUpdates();",
+        blockState: EDITED,
+        config: { feed: { web: "https://cdn/notes/" } },
       }),
     ).toEqual([]);
   });
 
+  /**
+   * Everything below is an app scaffolded before the updater shipped live, when
+   * turning updates on took five steps and one of them was skipped. New apps
+   * cannot reach these states: the template ships all of it, live.
+   */
   it("catches a feed configured with no builder call", () => {
-    expect(names({ ...clean, config: { feedUrl: "https://cdn/bundles.json" } })).toEqual([
-      "OTA updates wired up",
+    expect(
+      names({
+        ...clean,
+        blockState: EDITED,
+        config: { feed: { web: "https://cdn/notes/" } },
+        mauiProgram: "builder.UseVidra();",
+      }),
+    ).toEqual(["OTA updates wired up"]);
+  });
+
+  it("catches native updates with no builder call, no package, and a dead entry point", () => {
+    expect(
+      names({
+        ...clean,
+        blockState: EDITED,
+        config: { feed: "https://cdn/notes/" },
+        mauiProgram: "builder.UseVidra().UseVidraUpdates();",
+        csproj: '<PackageReference Include="Vidra.Hosting.Maui" Version="0.4.0" />',
+        entryPoints: { Windows: "static void Main() { }" },
+      }),
+    ).toEqual([
+      "Native updates wired up",
+      "Velopack package",
+      "Velopack entry point (Windows)",
     ]);
   });
 
-  it("catches a builder call with no feed", () => {
-    expect(names({ ...clean, mauiProgram: ".UseVidra().UseVidraUpdates();" })).toEqual([
-      "OTA updates configured",
-    ]);
+  /**
+   * The one thing a package reference cannot retrofit. Commented out, the app
+   * installs and launches perfectly and never handles a Velopack hook.
+   */
+  it("does not mistake the old commented-out entry point for a live one", () => {
+    expect(
+      names({
+        ...clean,
+        blockState: EDITED,
+        config: { feed: "https://cdn/notes/" },
+        entryPoints: { MacCatalyst: "// VelopackApp.Build().UseVidraLocator().Run();" },
+      }),
+    ).toEqual(["Velopack entry point (MacCatalyst)"]);
   });
 
   /**
@@ -253,8 +347,8 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       names({
         ...clean,
-        config: { feedUrl: "https://cdn/bundles.json", publicKeys: ["k"] },
-        mauiProgram: ".UseVidra().UseVidraUpdates();",
+        blockState: EDITED,
+        config: { feed: "https://cdn/notes/", publicKeys: ["k"] },
         publishedUnsigned: true,
       }),
     ).toEqual(["Feed signature"]);
@@ -264,38 +358,13 @@ describe("diagnoseUpdateConfiguration", () => {
     expect(
       diagnoseUpdateConfiguration({
         ...clean,
-        config: { feedUrl: "https://cdn/bundles.json" },
-        mauiProgram: ".UseVidra().UseVidraUpdates();",
+        blockState: EDITED,
+        config: { feed: "https://cdn/notes/" },
         publishedUnsigned: true,
       }),
     ).toEqual([]);
   });
 
-  it("catches native updates configured with no builder call", () => {
-    expect(
-      names({
-        ...clean,
-        config: { feedUrl: "https://cdn/bundles.json", native: { feedUrl: "https://cdn/" } },
-        mauiProgram: ".UseVidra().UseVidraUpdates();",
-      }),
-    ).toEqual(["Native updates wired up"]);
-  });
-
-  it("catches a native block with no feed URL", () => {
-    expect(
-      names({
-        ...clean,
-        config: { native: { channel: "osx" } },
-        mauiProgram: ".UseVidra().UseVidraUpdates().UseVidraNativeUpdates();",
-      }),
-    ).toContain("Native feed");
-  });
-
-  /**
-   * A source file that could not be read is not evidence of a missing call.
-   * Reporting one would make `vidra doctor` fail on a project layout it simply
-   * does not understand.
-   */
   /**
    * The scaffolded MauiProgram explains how to turn updates on, and that
    * explanation names the very call being looked for. A substring search
@@ -303,18 +372,36 @@ describe("diagnoseUpdateConfiguration", () => {
    */
   it("does not mistake the template's own comment for a builder call", () => {
     const template = [
-      "// Over-the-air updates are opt-in: add `.UseVidraUpdates()` below,",
-      "// and a `vidra.updates` block to package.json.",
+      "// Write it with `npx vidra updates init --feed <url>`, then",
+      "// `.UseVidraUpdates()` is already called below.",
       "builder.UseMauiApp<App>().UseVidra();",
     ].join("\n");
 
-    expect(names({ ...clean, config: { feedUrl: "https://cdn/bundles.json" }, mauiProgram: template }))
-      .toEqual(["OTA updates wired up"]);
+    expect(
+      names({
+        ...clean,
+        blockState: EDITED,
+        config: { feed: { web: "https://cdn/notes/" } },
+        mauiProgram: template,
+      }),
+    ).toEqual(["OTA updates wired up"]);
   });
 
-  it("does not accuse an app whose MauiProgram could not be read", () => {
+  /**
+   * A source file that could not be read is not evidence of a missing call.
+   * Reporting one would make `vidra doctor` fail on a project layout it simply
+   * does not understand.
+   */
+  it("does not accuse an app whose sources could not be read", () => {
     expect(
-      names({ ...clean, config: { feedUrl: "https://cdn/bundles.json" }, mauiProgram: null }),
+      names({
+        ...clean,
+        blockState: EDITED,
+        config: { feed: "https://cdn/notes/" },
+        mauiProgram: null,
+        csproj: null,
+        entryPoints: {},
+      }),
     ).toEqual([]);
   });
 });

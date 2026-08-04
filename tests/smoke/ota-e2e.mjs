@@ -44,8 +44,15 @@ fs.rmSync(work, { recursive: true, force: true });
 fs.mkdirSync(feed, { recursive: true });
 
 try {
-  publishGoodBundle();
+  // The server first, then the publish. Publishing merges from the live index
+  // and a *refused connection* is a hard failure by design: it cannot be told
+  // apart from a reachable feed that is temporarily broken, and quietly
+  // publishing an index containing only the newest entry would strand every
+  // install that can only run an older one. A 404 is different, and is the
+  // ordinary first publish.
   server = serveFeed();
+  await waitForServer();
+  publishGoodBundle();
   await waitForFeed();
 
   // ---- staged: the update is downloaded, and does not take effect yet --------
@@ -163,9 +170,14 @@ process.exit(failures === 0 ? 0 : 1);
 // ------------------------------------------------------------------ helpers --
 
 /**
- * Publishes the bundle under test with `vidra bundle` — the command a real
+ * Publishes the bundle under test with `vidra build --web` — the command a real
  * publisher runs — after marking `ui/dist` so the loaded page can be identified,
  * and bumping the version so it outranks what the app shipped with.
+ *
+ * The output directory is not passed: it is derived from the app's own
+ * `vidra.updates.feed`, which the rig points at this scratch feed. Publishing
+ * somewhere the app is not reading from is the failure that costs a release, so
+ * the two are one setting rather than two.
  */
 function publishGoodBundle() {
   const dist = path.join(project, "ui", "dist");
@@ -183,9 +195,16 @@ function publishGoodBundle() {
 
   run(
     "node",
-    [cli, "bundle", "--skip-build", "--out", feed, ...(signingKey ? ["--sign", signingKey] : [])],
+    [cli, "build", "--web", ...(signingKey ? ["--sign", signingKey] : [])],
     project,
   );
+
+  // `--web` writes into the layout's feed directory; the rig serves its own, so
+  // move what was produced. Copying rather than pointing the app at dist/ keeps
+  // the "feed edited behind the app's back" cases below working on files nothing
+  // else rewrites.
+  fs.cpSync(path.join(project, "dist", "feed"), feed, { recursive: true });
+  console.log(`==> copied dist/feed into ${feed}`);
 
   const manifest = readManifest();
   const entry = manifest.bundles.at(-1);
@@ -259,7 +278,29 @@ function readManifest() {
   return JSON.parse(fs.readFileSync(path.join(feed, "bundles.json"), "utf8"));
 }
 
-/** Blocks until the feed is actually answering, so launch 1 is not a race. */
+/**
+ * Blocks until the port is listening, whatever it answers.
+ *
+ * A 404 is a serving feed with nothing published yet, which is exactly the
+ * state the first publish merges from. A refused connection is not, and telling
+ * them apart is the whole reason publishing fails closed.
+ */
+async function waitForServer() {
+  const url = `http://127.0.0.1:${port}/`;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      await fetch(url, { signal: AbortSignal.timeout(1000) });
+      console.log(`==> feed server is listening on ${port}`);
+      return;
+    } catch {
+      // Not up yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`the feed server never came up on ${port}`);
+}
+
+/** Blocks until the published index is actually being served, so launch 1 is not a race. */
 async function waitForFeed() {
   const url = `http://127.0.0.1:${port}/bundles.json`;
   for (let attempt = 0; attempt < 40; attempt++) {

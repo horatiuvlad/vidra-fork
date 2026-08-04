@@ -9,19 +9,15 @@
 // `--veloapp-*` argument and expects it to do that work and exit without ever
 // showing a window. `VelopackApp.Build()...Run()` is what handles those launches,
 // and `vpk pack` statically inspects the assembly and warns when it finds the
-// call anywhere other than the entry point. Putting it here costs nothing and
-// means an app that later enables updates needs no migration into generated code.
+// call anywhere other than the entry point.
 //
-// To turn native updates on:
-//   1. add the Vidra.Updates.Native package reference to this project
-//   2. uncomment the two lines below, and the ones in MauiProgram.cs
-//   3. add a `vidra.updates.native.feedUrl` to package.json
-//   4. build with `npx vidra build --target windows --native-update`
-//
-// `npx vidra doctor` checks all four and names whichever is missing.
+// It is live from the first scaffold and does nothing at all until this app is
+// installed from a Velopack release — which it is not, until `package.json`'s
+// `vidra.updates.feed` (already there, empty) names one and `vidra build` packs
+// a release into it. Filling in that URL is the whole opt-in.
 
-// using Velopack;
-// using Vidra.Hosting;
+using Velopack;
+using Vidra.Hosting;
 
 namespace {{projectName}}.WinUI;
 
@@ -30,7 +26,7 @@ public static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        // VelopackApp.Build().UseVidraLocator().Run();
+        VelopackApp.Build().UseVidraLocator().Run();
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
 

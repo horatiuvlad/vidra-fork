@@ -75,6 +75,51 @@ npm run dev:host:windows
 npm run build
 ```
 
+### Updates
+
+This app already ships the updater, wired up and checking nothing. The switch is
+in `package.json`, empty:
+
+```json
+"vidra": {
+  "updates": {
+    "feed": ""
+  }
+}
+```
+
+Fill it in with the directory your feed is served from and both tiers start:
+
+```json
+"feed": "https://updates.example.com/notes/"
+```
+
+Web-bundle updates ship a new `ui/` build that applies on the next launch.
+Whole-app updates replace the installed app, native code included. One directory
+serves both, since their indexes never collide. To put them on different hosts:
+
+```json
+"feed": { "web": "https://cdn.example.com/notes/", "app": "https://dl.example.com/notes/" }
+```
+
+`github:owner/repo` works too, and expands to that repo's `updates` release.
+
+There is a command for it, which also writes a signing key if you ask:
+
+```bash
+npx vidra updates init --feed https://updates.example.com/notes/ --keygen
+npx vidra updates                  # which tiers are on, and where they point
+```
+
+Then publish:
+
+```bash
+npx vidra build          # the app, plus every tier you configured
+npx vidra build --web    # just a new UI, no compile
+```
+
+`npx vidra <command> --help` lists what each one takes.
+
 ## Project Structure
 
 ```

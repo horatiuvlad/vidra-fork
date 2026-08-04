@@ -9,28 +9,32 @@ public static class MauiProgram
     {
         var builder = MauiApp.CreateBuilder();
 
-        // Updates come in two tiers. Both are opt-in and both read one
-        // `vidra.updates` block in package.json.
+        // Updates are wired up and doing nothing, which is the intended state
+        // until this app has a feed to check. The switch is already in
+        // package.json, empty — filling it in is the whole opt-in:
         //
-        // Web bundle: fast, no reinstall. Add `.UseVidraUpdates()` below and
+        //   "vidra": { "updates": { "feed": "https://updates.example.com/notes/" } }
         //
-        //   "vidra": { "updates": { "feedUrl": "https://example.com/bundles.json" } }
+        // Type a URL there, or run `npx vidra updates init --feed <url>`, then
+        // publish with `npx vidra build` (both tiers) or `npx vidra build --web`
+        // (just the UI, no compile).
         //
-        // then publish with `npx vidra bundle`. A bundle only installs when its
-        // contract fingerprints match this build, so JS can never call a bridge
-        // the installed binary lacks.
+        // One directory serves both tiers. To split them across two hosts:
         //
-        // Whole app: native code included. Reference Vidra.Updates.Native, add
-        // `.UseVidraNativeUpdates()`, uncomment the line in Platforms/*/Program.cs,
-        // and add
+        //   "feed": { "web": "https://cdn/notes/", "app": "https://dl/notes/" }
         //
-        //   "vidra": { "updates": { "native": { "feedUrl": "https://example.com/app/" } } }
+        // Web bundle: your `ui/` build, applied on the next launch, no reinstall.
+        // A bundle only installs when its contract fingerprints match this build,
+        // so JS can never call a bridge the installed binary lacks.
         //
-        // then build with `npx vidra build --target <target> --native-update`.
-        // `npx vidra doctor` names whichever half is missing.
+        // Whole app: native code included, via Velopack. Its other half is the
+        // `VelopackApp` line in Platforms/*/Program.cs, which has to run before
+        // the UI framework starts.
         builder
             .UseMauiApp<App>()
             .UseVidra()
+            .UseVidraUpdates()
+            .UseVidraNativeUpdates()
             .ConfigureFonts(fonts =>
             {
                 fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
