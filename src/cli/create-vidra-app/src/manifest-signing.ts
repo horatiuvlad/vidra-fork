@@ -104,7 +104,7 @@ export const signManifest = (manifestBytes: Buffer, privateKeyPem: string): Sign
   };
 };
 
-/** Verifies a signature the way the host does. Used by tests, and by `vidra bundle`. */
+/** Verifies a signature the way the host does. Used by tests, and by the publish step of `vidra build`. */
 export const verifyManifest = (
   manifestBytes: Buffer,
   document: SignatureDocument,

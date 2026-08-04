@@ -137,7 +137,7 @@ export const keygenCommand = async (argv: string[]): Promise<void> => {
     footer(
       dim(
         `never commit it · back it up · in CI pass it as ${value("VIDRA_UPDATE_SIGNING_KEY")} ` +
-          `and sign with ${value("vidra bundle --sign")}`,
+          `and sign with ${value("vidra build --web --sign")}`,
       ),
     ),
   );

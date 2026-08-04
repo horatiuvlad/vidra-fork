@@ -519,7 +519,7 @@ export const checkVelopack = (required: boolean): Requirement => {
     name: "Velopack (vpk)",
     status: required ? "missing" : "unknown",
     detail: required
-      ? "vidra.updates.native.feedUrl is set but vpk is not installed, so `vidra build` cannot pack a release"
+      ? "a feed is configured for whole-app updates but vpk is not installed, so `vidra build` cannot pack a release"
       : "not installed, and only needed once an app publishes whole-app updates",
     fix: "dotnet tool install -g vpk",
   };
