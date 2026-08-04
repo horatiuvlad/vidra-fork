@@ -36,10 +36,14 @@ describe("distLayout", () => {
     expect(layout.shared).toBe(false);
   });
 
-  it("writes nothing for a tier that is off", () => {
+  /**
+   * One tier on its own is still one destination, so it gets the plain name.
+   * The split names exist to tell two remote prefixes apart.
+   */
+  it("uses the plain feed directory when only one tier is on", () => {
     const layout = distLayout(ROOT, resolveFeeds({ feed: { web: "https://cdn/notes/" } }));
 
-    expect(rel(layout.web)).toBe(path.join("dist", WEB_FEED_DIR));
+    expect(rel(layout.web)).toBe(path.join("dist", FEED_DIR));
     expect(layout.app).toBeNull();
   });
 

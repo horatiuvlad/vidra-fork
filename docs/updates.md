@@ -105,8 +105,11 @@ dist/
 
 **One rule: `dist/` is yours, `dist/feed/` is the server's.** A feed directory
 mirrors exactly one remote prefix, so uploading is "sync this directory to the
-URL it mirrors" rather than a rule about which files to include. Split feeds
-produce `feed-web/` and `feed-app/` instead, one per destination.
+URL it mirrors" rather than a rule about which files to include.
+
+One directory per *destination*: two tiers sharing a URL get one `feed/`, and so
+does a single tier on its own. Only genuinely separate destinations produce
+`feed-web/` and `feed-app/`.
 
 ### Doing less than everything
 

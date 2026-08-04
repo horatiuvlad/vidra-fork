@@ -45,9 +45,19 @@ export const distLayout = (
     ? path.join(projectRoot, "dist", channel)
     : path.join(projectRoot, "dist");
 
-  if (feeds.shared) {
+  // One directory per *destination*. Two tiers pointing at one place is one
+  // destination, and so is a single tier on its own — the split names exist to
+  // tell two remote prefixes apart, and inventing them for one would be noise.
+  const destinations = new Set([feeds.web?.base, feeds.app?.base].filter(Boolean));
+
+  if (destinations.size <= 1) {
     const feed = path.join(root, FEED_DIR);
-    return { root, web: feed, app: feed, shared: true };
+    return {
+      root,
+      web: feeds.web ? feed : null,
+      app: feeds.app ? feed : null,
+      shared: true,
+    };
   }
 
   return {

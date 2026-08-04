@@ -595,14 +595,18 @@ jobs:
       # Named globs rather than `dist/*`: a feed directory lives under `dist/`
       # now, and it holds a 94 MB package the native-update proofs already
       # upload the interesting parts of.
-      - name: Upload packaged installer
+      #
+      # "artifact" rather than "installer", because on Windows this is a
+      # self-contained ZIP. An installer only exists once an app configures a
+      # native feed, and this build has none — the real `Setup.exe` is produced
+      # by the native round-trip further down, and uploaded there.
+      - name: Upload packaged artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: vidra-installer-${{ matrix.os }}
+          name: vidra-artifact-${{ matrix.os }}
           path: |
             ${{ runner.temp }}/vidra-smoke/dist/*.dmg
-            ${{ runner.temp }}/vidra-smoke/dist/*.exe
             ${{ runner.temp }}/vidra-smoke/dist/*.zip
           if-no-files-found: ignore
 
@@ -850,6 +854,22 @@ jobs:
           # here can produce.
           codesign -dv --verbose=4 "$NATIVE_EXE" 2>&1 | sed -n '1,12p' || true
           codesign --verify --strict "$NATIVE_EXE"
+
+      # The one artifact nobody could inspect until now, and the one most worth
+      # having when a release goes wrong: the installer the round-trip above
+      # actually installed from. `Setup.exe` on Windows is written by `vpk` and
+      # copied to a versioned name by the build; on macOS the equivalent is the
+      # DMG wrapping the packed `.app`. Both are the *packed* artifact, which is
+      # the thing that differs from the plain build uploaded earlier.
+      - name: Upload the installer the round-trip used
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vidra-packed-installer-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/vidra-smoke/dist/*Setup.exe
+            ${{ runner.temp }}/vidra-smoke/dist/*.dmg
+          if-no-files-found: ignore
 
       - name: Upload native-update proofs
         if: always()
