@@ -51,18 +51,22 @@ jobs:
           dotnet-version: |
             10.0.x
 
-      # See ci.yml: the macos runner image tops out below the Xcode the newest
-      # maccatalyst manifest wants, so pin the newest available and skip the
-      # manifest update during workload install.
-      - name: Select newest available Xcode (macOS)
+      # No Xcode pin and no manifest pin, for the reasons ci.yml gives at length:
+      # both were written when the image topped out below the SDK the maccatalyst
+      # manifest wanted, and both inverted once the image shipped 26.6. ci.yml
+      # dropped them; this job kept them, so the packages nuget.org gets were
+      # built on a toolchain CI had already proved does not build them — 26.3
+      # against a Catalyst pack that requires the 26.5 SDK. Log what the image
+      # gives and pack on the same toolchain the suite just went green on.
+      - name: Log Xcode version (macOS)
         if: runner.os == 'macOS'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "26.3"
+        run: |
+          xcode-select -p
+          xcodebuild -version
 
       - name: Install MAUI workload (${{ matrix.maui-workload }})
         shell: bash
-        run: dotnet workload install ${{ matrix.maui-workload }} --skip-manifest-update
+        run: dotnet workload install ${{ matrix.maui-workload }}
 
       - name: Pack all Vidra packages (Release)
         shell: bash
@@ -79,6 +83,9 @@ jobs:
     name: Merge${{ inputs.push && ' + push' || ' (dry run)' }}
     needs: pack
     runs-on: ubuntu-latest
+    permissions:
+      # Write, only so a successful publish can leave a tag behind.
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -119,6 +126,39 @@ jobs:
           path: merged/*.nupkg
           if-no-files-found: error
 
+      # `--skip-duplicate` below is what makes a retry work after a push fails
+      # part-way through nine packages, and it should stay. What it cannot tell
+      # apart is the run where *every* package is already published: that one
+      # skips all nine, pushes nothing, and reports success — which reads as a
+      # release. nuget.org is the ground truth for what is already out, so ask
+      # it before pushing, while "nothing to do" can still be told apart from
+      # "done".
+      - name: Refuse a push with nothing to publish
+        if: ${{ inputs.push }}
+        run: |
+          pending=0
+          for pkg in merged/*.nupkg; do
+            base="$(basename "$pkg" .nupkg)"
+            if [[ ! "$base" =~ ^(.+)\.([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+              echo "::error::cannot read an id and version out of $base"; exit 1
+            fi
+            id="${BASH_REMATCH[1]}"
+            version="${BASH_REMATCH[2]}"
+            lower="$(echo "$id" | tr '[:upper:]' '[:lower:]')"
+            if curl -sf "https://api.nuget.org/v3-flatcontainer/$lower/index.json" \
+                 | jq -e --arg v "$version" '.versions | index($v)' >/dev/null 2>&1; then
+              echo "  $id $version — already on nuget.org, will be skipped"
+            else
+              echo "  $id $version — to publish"
+              pending=$((pending + 1))
+            fi
+          done
+          if [ "$pending" -eq 0 ]; then
+            echo "::error::every packed version is already on nuget.org — run the Bump version workflow before releasing again"
+            exit 1
+          fi
+          echo "$pending package(s) to publish"
+
       - name: Push to nuget.org
         if: ${{ inputs.push }}
         run: |
@@ -126,3 +166,11 @@ jobs:
             --api-key "${{ secrets.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
+
+      # Nothing has ever tagged a release, so the only record of which commit a
+      # published version was built from is a workflow run's timestamp. Both
+      # release workflows create the tag and neither minds finding it already
+      # there — the second one to publish a given version is not a failure.
+      - name: Tag the published version
+        if: ${{ inputs.push }}
+        run: bash tests/ci/tag-release.sh
