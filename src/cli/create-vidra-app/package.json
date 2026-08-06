@@ -47,19 +47,19 @@
   },
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
-    "chalk": "^5.4.1",
+    "chalk": "^6.0.0",
     "fs-extra": "^11.2.0",
     "prompts": "^2.4.2"
   },
   "devDependencies": {
     "@types/fs-extra": "^11.0.4",
-    "@types/node": "^22.9.0",
+    "@types/node": "^26.1.2",
     "@types/prompts": "^2.4.9",
     "tsup": "^8.5.1",
-    "typescript": "^6.0.2",
-    "vitest": "^2.1.4"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }

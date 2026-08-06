@@ -25,8 +25,11 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
+        // `format: "iife"` already implies no code splitting, and since Vite 8
+        // saying so twice is a warning on every app build: "inlineDynamicImports
+        // option is ignored because codeSplitting: false is set". Output is
+        // byte-identical without it — still one file, still no import map.
         format: "iife",
-        inlineDynamicImports: true,
       },
     },
   },
