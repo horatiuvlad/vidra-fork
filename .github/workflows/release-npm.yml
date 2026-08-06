@@ -90,6 +90,24 @@ jobs:
           fi
           echo "$pending package(s) to publish"
 
+      # The CLI scaffolds apps that pin `Vidra.Hosting.Maui` at this exact
+      # version from nuget.org — `{{vidraVersion}}` is the one token that has no
+      # monorepo fallback, so a published CLI whose NuGet half is not out yet
+      # scaffolds apps that cannot restore. That is why the two release
+      # workflows are not interchangeable in order: NuGet first, npm second.
+      # 0.4.0 got away with a three-minute window; it is not a rule, it was luck.
+      - name: The NuGet half has to be out first
+        if: ${{ inputs.push && (inputs.packages == 'both' || inputs.packages == 'cli') }}
+        run: |
+          version="$(node -p "require('./version.json').version")"
+          if curl -sf "https://api.nuget.org/v3-flatcontainer/vidra.hosting.maui/index.json" \
+               | jq -e --arg v "$version" '.versions | index($v)' >/dev/null 2>&1; then
+            echo "Vidra.Hosting.Maui $version is on nuget.org"
+          else
+            echo "::error::Vidra.Hosting.Maui $version is not on nuget.org yet — run Release NuGet first, or every app scaffolded by this CLI will fail to restore"
+            exit 1
+          fi
+
       - name: Publish @vidra-dev/sdk
         if: ${{ inputs.packages == 'both' || inputs.packages == 'sdk' }}
         working-directory: src/sdk/vidra-js
