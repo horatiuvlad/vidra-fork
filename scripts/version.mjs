@@ -22,6 +22,14 @@ const SOURCE = path.join(ROOT, "version.json");
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
 
+/** Both places an npm lockfile names its own package's version. */
+const writeLockVersion = (source, version) => {
+  const lock = JSON.parse(source);
+  lock.version = version;
+  if (lock.packages?.[""]) lock.packages[""].version = version;
+  return `${JSON.stringify(lock, null, 2)}\n`;
+};
+
 /** Files that carry a copy of the version, and how to read/write it. */
 const derived = [
   {
@@ -41,6 +49,22 @@ const derived = [
     file: "src/cli/create-vidra-app/src/theme.ts",
     read: (s) => s.match(/CLI_VERSION = "([^"]+)"/)?.[1],
     write: (s, v) => s.replace(/(CLI_VERSION = ")[^"]+(")/, `$1${v}$2`),
+  },
+  {
+    // A lockfile records the version of the package it locks, in two places.
+    // `npm ci` does not mind if they disagree with package.json and the
+    // published tarball takes its version from package.json either way — so
+    // this drifts silently, which is the one thing version.json exists to stop.
+    // Rewritten by round-trip because npm's own formatting is exactly
+    // JSON.stringify(…, 2) plus a newline.
+    file: "src/cli/create-vidra-app/package-lock.json",
+    read: (s) => JSON.parse(s).version,
+    write: (s, v) => writeLockVersion(s, v),
+  },
+  {
+    file: "src/sdk/vidra-js/package-lock.json",
+    read: (s) => JSON.parse(s).version,
+    write: (s, v) => writeLockVersion(s, v),
   },
   {
     // Every packable csproj resolves <Version> through this property, so the
