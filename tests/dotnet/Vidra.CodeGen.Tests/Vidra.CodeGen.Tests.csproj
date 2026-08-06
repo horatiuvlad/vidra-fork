@@ -18,7 +18,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <!-- 7.2.2 is the ceiling on purpose: FluentAssertions 8 left Apache-2.0 for
+         a commercial licence. Do not "update" this one. -->
+    <PackageReference Include="FluentAssertions" Version="7.2.2" />
     <PackageReference Include="coverlet.collector" Version="10.0.1">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
