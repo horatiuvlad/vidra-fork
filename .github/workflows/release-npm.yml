@@ -44,7 +44,8 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # Write, only so a successful publish can leave a tag behind.
+      contents: write
       # Required for npm provenance, which signs a verifiable link between the
       # published tarball and the commit + workflow that produced it.
       id-token: write
@@ -60,6 +61,34 @@ jobs:
           cache-dependency-path: |
             src/cli/create-vidra-app/package-lock.json
             src/sdk/vidra-js/package-lock.json
+
+      # npm-publish.sh skips a package that is already on the registry, which is
+      # what lets a "publish both" run work when only one was bumped — and it is
+      # also what makes a re-run at an already-released version skip everything
+      # and report success. Both packages skipping is the case that reads as a
+      # release and is not one, so decide it here, before anything is published.
+      - name: Refuse a run with nothing to publish
+        run: |
+          case "${{ inputs.packages }}" in
+            both) dirs=(src/sdk/vidra-js src/cli/create-vidra-app) ;;
+            sdk)  dirs=(src/sdk/vidra-js) ;;
+            cli)  dirs=(src/cli/create-vidra-app) ;;
+          esac
+          pending=0
+          for dir in "${dirs[@]}"; do
+            spec="$(node -p "const p=require('./$dir/package.json'); p.name + '@' + p.version")"
+            if npm view "$spec" version >/dev/null 2>&1; then
+              echo "  $spec — already on the registry, will be skipped"
+            else
+              echo "  $spec — to publish"
+              pending=$((pending + 1))
+            fi
+          done
+          if [ "$pending" -eq 0 ]; then
+            echo "::error::every selected package is already on npm at this version — run the Bump version workflow before releasing again"
+            exit 1
+          fi
+          echo "$pending package(s) to publish"
 
       - name: Publish @vidra-dev/sdk
         if: ${{ inputs.packages == 'both' || inputs.packages == 'sdk' }}
@@ -81,6 +110,13 @@ jobs:
           PUSH: ${{ inputs.push }}
           PROVENANCE: ${{ inputs.provenance }}
         run: bash "$GITHUB_WORKSPACE/tests/ci/npm-publish.sh"
+
+      # See tests/ci/tag-release.sh: nothing has ever tagged a release, so which
+      # commit a published version came from is only recoverable from a run's
+      # timestamp. Both release workflows tag, and neither minds finding it done.
+      - name: Tag the published version
+        if: ${{ inputs.push }}
+        run: bash tests/ci/tag-release.sh
 
       - name: Summary
         if: always()
