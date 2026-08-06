@@ -8,7 +8,7 @@ A cross-platform application built with [Vidra](https://vidra.build) — React U
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - The .NET MAUI workload: `dotnet workload install maui`
-- [Node.js](https://nodejs.org/) 18+
+- [Node.js](https://nodejs.org/) 22+
 - macOS targets require Xcode; Windows targets must be built on Windows
 
 Not sure if you're set up? Run:
