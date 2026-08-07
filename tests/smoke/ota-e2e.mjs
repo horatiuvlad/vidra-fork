@@ -75,6 +75,11 @@ try {
   expect(promoted.marker, MARKER, "the updated bundle served");
   expect(promoted.currentVersion, "1.3.0", "current version");
   expectBridge(promoted, "the bridge still works from an updated bundle");
+  // Asserted here, where it happens. A bundle that serves and talks to the
+  // bridge but never clears its probation looks perfectly healthy for two more
+  // launches and is then rolled back — which is how issue #13 spent its life
+  // being reported against the phase three launches further on.
+  expectLog(promoted, "probation cleared", "and its probation is cleared, so it is not rolled back later");
 
   // ---- mismatch: newer, but built against a different contract --------------
   addEntry({
@@ -358,6 +363,7 @@ function launch(name, { timeout = 60 } = {}) {
   }
 
   const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
+  proof.output = output;
   console.log(
     `    marker=${proof.marker} current=${proof.currentVersion} ` +
       `pending=${proof.pendingVersion} counter=${proof.counter}`,
@@ -375,6 +381,15 @@ function expect(actual, expected, what) {
   console.log(
     `::error::${what}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
   );
+}
+
+function expectLog(proof, needle, what) {
+  if (proof.output.includes(needle)) {
+    console.log(`    \u2713 ${what}`);
+    return;
+  }
+  failures++;
+  console.log(`::error::${what}: the launch never logged "${needle}"`);
 }
 
 function expectBridge(proof, what = "the bridge completed a round-trip") {
