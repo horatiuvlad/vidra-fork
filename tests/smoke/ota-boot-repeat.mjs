@@ -9,7 +9,7 @@
 // Usage:
 //   node ota-boot-repeat.mjs --bin <app binary> --project <scaffold root>
 //                            --cli <cli.js> --work <scratch dir>
-//                            [--cycles 20] [--port 8098] [--signing-key <pem>]
+//                            [--cycles 20] [--port 8099] [--signing-key <pem>]
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -21,7 +21,7 @@ const project = required("project");
 const cli = required("cli");
 const work = required("work");
 const cycles = Number(args.cycles ?? 20);
-const port = Number(args.port ?? 8098);
+const port = Number(args.port ?? 8099);
 const signingKey = args["signing-key"] ?? null;
 const feed = path.join(work, "feed");
 
