@@ -74,6 +74,11 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             return;
         }
 
+        // A frame arrived over the native channel, so the bundle's JavaScript has
+        // parsed, run, and constructed the SDK's transport. Nothing weaker than a
+        // booted bundle can produce one.
+        AnnounceBundleBoot();
+
         if (string.Equals(kind, "reverse", StringComparison.OrdinalIgnoreCase))
         {
             HandleReverseResponse(dataJson);
@@ -89,20 +94,44 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
     /// </summary>
     /// <remarks>
     /// This is what clears an updated bundle's probation, so it has to mean
-    /// something a broken bundle cannot fake. It fires when the page has
-    /// installed <c>window.__vidra_initialize</c> — the SDK does that while
-    /// constructing its client, so the bundle's JavaScript has parsed and
-    /// executed and the bridge exists on both sides.
+    /// something a broken bundle cannot fake. Two things say it, and whichever
+    /// happens first wins:
+    /// <list type="bullet">
+    /// <item>a frame arrived from JS — only the SDK's transport sends those, so
+    /// the bundle's JavaScript has parsed, run and reached native;</item>
+    /// <item>the page has installed <c>window.__vidra_initialize</c>, which the
+    /// SDK does while constructing its client. This covers a bundle that boots
+    /// the SDK and never calls into native.</item>
+    /// </list>
     ///
-    /// What it does not prove is that the app rendered anything. A bundle whose
-    /// own code throws after the SDK is up still counts as booted here, and would
-    /// not be rolled back. Closing that gap needs the JS side to say so
-    /// explicitly, which is a bridge contract change and deliberately not in the
-    /// first version.
+    /// The inbound frame is the one that normally fires, and it exists because
+    /// the poll alone was not enough: it takes its first sample a quarter of a
+    /// second after navigation completes, and an app whose page is already
+    /// talking to native by then can finish its work and exit inside that
+    /// window. When that happened the bundle stayed on probation, and two silent
+    /// launches later a perfectly good bundle was rolled back and blocked.
+    ///
+    /// What neither proves is that the app rendered anything. A bundle whose own
+    /// code throws after the SDK is up still counts as booted here, and would not
+    /// be rolled back. Closing that gap needs the JS side to say so explicitly,
+    /// which is a bridge contract change and deliberately not in the first
+    /// version.
     /// </remarks>
     public event Action? BundleBooted;
 
-    private bool _bundleBootAnnounced;
+    private int _bundleBootAnnounced;
+
+    /// <summary>
+    /// Raises <see cref="BundleBooted"/> exactly once, whichever proof arrives
+    /// first and on whichever thread carries it.
+    /// </summary>
+    private void AnnounceBundleBoot()
+    {
+        if (Interlocked.Exchange(ref _bundleBootAnnounced, 1) != 0)
+            return;
+
+        BundleBooted?.Invoke();
+    }
 
     private async void OnNavigated(object? sender, WebNavigatedEventArgs e)
     {
@@ -135,14 +164,17 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
     /// navigation completes: the document is "navigated" before its scripts have
     /// run, so a single check would report every bundle broken.
     /// </summary>
+    /// <remarks>
+    /// The first sample is taken straight away and the wait moved to the end of
+    /// the loop. Sleeping first cost a quarter of a second on every launch, in
+    /// the one place where the app may already have everything it needs to exit.
+    /// </remarks>
     private async Task WatchBundleBootAsync()
     {
         const int attempts = 40;
 
-        for (var attempt = 0; attempt < attempts && !_bundleBootAnnounced; attempt++)
+        for (var attempt = 0; attempt < attempts && Volatile.Read(ref _bundleBootAnnounced) == 0; attempt++)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(250));
-
             string? answer;
             try
             {
@@ -154,16 +186,18 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Vidra] boot probe failed: {ex.Message}");
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
                 continue;
             }
 
             // Platforms disagree about whether a JS string comes back quoted.
-            if (answer?.Trim().Trim('"') != "true")
-                continue;
+            if (answer?.Trim().Trim('"') == "true")
+            {
+                AnnounceBundleBoot();
+                return;
+            }
 
-            _bundleBootAnnounced = true;
-            BundleBooted?.Invoke();
-            return;
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
         }
     }
 
@@ -172,6 +206,7 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
         if (e.Url.StartsWith("vidra://reverse", StringComparison.OrdinalIgnoreCase))
         {
             e.Cancel = true;
+            AnnounceBundleBoot();
             var payload = Uri.UnescapeDataString(e.Url.Substring("vidra://reverse?payload=".Length));
             HandleReverseResponse(payload);
             return;
@@ -181,6 +216,10 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             return;
 
         e.Cancel = true;
+
+        // Same claim as the native channel, on the transport platforms fall back
+        // to: only the SDK navigates to vidra://.
+        AnnounceBundleBoot();
 
         var bridgePayload = Uri.UnescapeDataString(e.Url.Substring("vidra://bridge?payload=".Length));
         var response = await _dispatcher.DispatchAsync(bridgePayload);
