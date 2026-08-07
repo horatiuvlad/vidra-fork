@@ -104,9 +104,24 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
 
     private bool _bundleBootAnnounced;
 
+    private static readonly bool BootTrace =
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VIDRA_BOOT_TRACE"));
+
+    private static readonly System.Diagnostics.Stopwatch TraceClock =
+        System.Diagnostics.Stopwatch.StartNew();
+
+    private static void Trace(string message)
+    {
+        if (!BootTrace) return;
+        Console.WriteLine($"[vidra] boot-trace {TraceClock.ElapsedMilliseconds}ms: {message}");
+        Console.Out.Flush();
+    }
+
     private async void OnNavigated(object? sender, WebNavigatedEventArgs e)
     {
+        Trace($"navigated url={e.Url} result={e.Result} subscribed={BundleBooted is not null}");
         await PushToJsAsync("window.__vidra_native = true");
+        Trace("pushed __vidra_native");
 
         var handshake = new BridgeHandshake
         {
@@ -117,6 +132,7 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
         try
         {
             await PushToJsAsync($"window.__vidra_initialize({BridgeSerializer.Serialize(handshake)})");
+            Trace("pushed __vidra_initialize");
         }
         catch (Exception ex)
         {
@@ -124,8 +140,10 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             // in JavaScript; keep the native UI thread alive so it remains visible.
             System.Diagnostics.Debug.WriteLine(
                 $"[Vidra] Bridge protocol initialization failed: {ex.Message}");
+            Trace($"handshake push threw: {ex.GetType().Name}: {ex.Message}");
         }
 
+        Trace($"starting watcher subscribed={BundleBooted is not null}");
         if (BundleBooted is not null)
             _ = WatchBundleBootAsync();
     }
@@ -146,14 +164,17 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             string? answer;
             try
             {
+                Trace($"probe {attempt} asking");
                 answer = await MainThread.InvokeOnMainThreadAsync(
                     () => _webView?.EvaluateJavaScriptAsync(
                         "String(typeof window.__vidra_initialize === 'function')")
                         ?? Task.FromResult<string>(null!));
+                Trace($"probe {attempt} answer={answer ?? "<null>"}");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Vidra] boot probe failed: {ex.Message}");
+                Trace($"probe {attempt} threw {ex.GetType().Name}: {ex.Message}");
                 continue;
             }
 

@@ -208,9 +208,13 @@ internal sealed class VidraUpdateService(VidraUpdateOptions options, IServicePro
     {
         var bridge = services.GetService<WebViewBridge>();
         if (bridge is null)
+        {
+            Log("watch-for-boot: no WebViewBridge in the container");
             return;
+        }
 
         bridge.BundleBooted += ConfirmBoot;
+        Log($"watch-for-boot: subscribed (probation={_state.Probation is not null})");
     }
 
     private TimeSpan StartupDelay()
