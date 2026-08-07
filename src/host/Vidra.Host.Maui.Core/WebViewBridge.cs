@@ -135,22 +135,30 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
 
     private async void OnNavigated(object? sender, WebNavigatedEventArgs e)
     {
-        await PushToJsAsync("window.__vidra_native = true");
-
-        var handshake = new BridgeHandshake
-        {
-            ProtocolVersion = BridgeProtocol.Version,
-            CoreFingerprint = BridgeContractRegistry.Fingerprint(BridgeManifestScope.Core),
-            AppFingerprint = BridgeContractRegistry.Fingerprint(BridgeManifestScope.App),
-        };
+        // Both pushes are guarded, and the watcher starts either way. This is an
+        // `async void` event handler, so an escaping exception is an unhandled
+        // one; and on Windows the first push is a real thrower —
+        // EvaluateJavaScriptAsync reports "a valid CoreWebView2 is not present"
+        // when the handler is between platform views, which has been seen on CI.
+        // Letting that skip the watcher would leave a promoted bundle with
+        // nothing to clear its probation.
         try
         {
+            await PushToJsAsync("window.__vidra_native = true");
+
+            var handshake = new BridgeHandshake
+            {
+                ProtocolVersion = BridgeProtocol.Version,
+                CoreFingerprint = BridgeContractRegistry.Fingerprint(BridgeManifestScope.Core),
+                AppFingerprint = BridgeContractRegistry.Fingerprint(BridgeManifestScope.App),
+            };
+
+            // Protocol mismatch handling renders its diagnostic before throwing
+            // in JavaScript; keep the native UI thread alive so it remains visible.
             await PushToJsAsync($"window.__vidra_initialize({BridgeSerializer.Serialize(handshake)})");
         }
         catch (Exception ex)
         {
-            // Protocol mismatch handling renders its diagnostic before throwing
-            // in JavaScript; keep the native UI thread alive so it remains visible.
             System.Diagnostics.Debug.WriteLine(
                 $"[Vidra] Bridge protocol initialization failed: {ex.Message}");
         }
