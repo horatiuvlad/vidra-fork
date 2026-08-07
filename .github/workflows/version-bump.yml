@@ -72,11 +72,38 @@ jobs:
           echo "next=$next" >> "$GITHUB_OUTPUT"
           echo "$current -> $next"
 
+      # "Released" means the registries, not this repository. The tag check came
+      # first and could never have fired: no release created a tag until
+      # tests/ci/tag-release.sh did, so 0.4.0 went out to npm and nuget.org with
+      # no v0.4.0 to find. The tag check stays — it is the cheap one, and it now
+      # has tags to catch — but the registries are asked as well, because they
+      # are what refuses the publish this bump is supposed to be preparing.
+      #
+      # Each registry is reached first and asked second. A check that passes
+      # because the network was down is the same useless check as the tag lookup
+      # that could never fire, so "could not ask" fails here rather than waving
+      # the bump through.
       - name: Refuse to reuse a released version
         run: |
-          if git rev-parse "v${{ steps.next.outputs.next }}" >/dev/null 2>&1; then
-            echo "::error::tag v${{ steps.next.outputs.next }} already exists"; exit 1
+          next="${{ steps.next.outputs.next }}"
+          if git rev-parse "v$next" >/dev/null 2>&1; then
+            echo "::error::tag v$next already exists"; exit 1
           fi
+
+          if ! npm view create-vidra-app version >/dev/null 2>&1; then
+            echo "::error::could not reach npm to check whether $next is taken"; exit 1
+          fi
+          if npm view "create-vidra-app@$next" version >/dev/null 2>&1; then
+            echo "::error::create-vidra-app@$next is already on npm"; exit 1
+          fi
+
+          if ! nuget="$(curl -sSf "https://api.nuget.org/v3-flatcontainer/vidra.bridge/index.json")"; then
+            echo "::error::could not reach nuget.org to check whether $next is taken"; exit 1
+          fi
+          if printf '%s' "$nuget" | jq -e --arg v "$next" '.versions | index($v)' >/dev/null; then
+            echo "::error::Vidra.Bridge $next is already on nuget.org"; exit 1
+          fi
+          echo "$next is unreleased on both registries"
 
       - name: Apply the bump
         run: |
