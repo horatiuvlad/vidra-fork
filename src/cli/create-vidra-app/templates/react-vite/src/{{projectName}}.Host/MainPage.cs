@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Vidra.Hosting;
 
 namespace {{projectName}};
@@ -23,11 +24,16 @@ public class MainPage : VidraPage
         try
         {
             var count = await Bridge.Js().Counter.IncrementAsync();
-            System.Diagnostics.Debug.WriteLine($"[MainPage] Counter is now {count}");
+            Trace.TraceInformation($"[MainPage] Counter is now {count}");
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[MainPage] Counter increment failed: {ex.Message}");
+            // Trace, not Debug: Debug.WriteLine compiles out of a Release build,
+            // which is exactly the build where someone is looking at a counter
+            // stuck at zero and has nothing to report. The whole exception, not
+            // ex.Message, because the bridge's answer to "why" is the error code
+            // on it (JS_HANDLER_NOT_FOUND, JS_HANDLER_ERROR, JS_RESPONSE_INVALID).
+            Trace.TraceError($"[MainPage] Counter increment failed: {ex}");
         }
     }
 }
