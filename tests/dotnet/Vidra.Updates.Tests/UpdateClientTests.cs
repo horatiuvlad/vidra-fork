@@ -168,6 +168,61 @@ public sealed class UpdateClientTests : IDisposable
         result.Reason.Should().Contain("already rejected");
     }
 
+    [Fact]
+    public async Task A_boot_confirmed_during_the_download_survives_the_check()
+    {
+        // The running app writes to the same state file the check is about to.
+        // Clearing probation on a bundle that has just proved it boots is the
+        // write that matters: put it back and the bundle is rolled back two
+        // launches later, having done nothing wrong.
+        var feed = PublishFeed(("1.1.0", Core, App));
+        var store = Store();
+        var serving = "a".PadRight(64, 'a');
+        store.SaveState(new UpdateState
+        {
+            Current = serving,
+            CurrentVersion = "1.0.5",
+            Probation = new BundleProbation(serving, 1),
+            Installed = new Dictionary<string, BundleIdentity>(StringComparer.OrdinalIgnoreCase)
+            {
+                [serving] = new("1.0.5", Core, App),
+            },
+        });
+
+        var source = new ConfirmsBootMidDownload(new FileBundleSource(feed), store);
+        var result = await new UpdateClient(store).CheckAsync(source, Request());
+
+        result.Outcome.Should().Be(UpdateCheckOutcome.Downloaded);
+        source.Confirmed.Should().BeTrue("the test only proves anything if the write happened mid-check");
+
+        // Both halves have to hold: what the running app cleared stays cleared,
+        // and the bundle the check downloaded is still staged.
+        store.LoadState().Probation.Should().BeNull();
+        store.LoadState().PendingVersion.Should().Be("1.1.0");
+        result.State!.Probation.Should().BeNull();
+    }
+
+    /// <summary>Clears probation the moment the archive is opened, as a booting bundle would.</summary>
+    private sealed class ConfirmsBootMidDownload(IBundleSource inner, BundleStore store) : IBundleSource
+    {
+        public bool Confirmed { get; private set; }
+
+        public string Description => inner.Description;
+
+        public Task<string> GetManifestAsync(CancellationToken ct = default)
+            => inner.GetManifestAsync(ct);
+
+        public Task<string?> GetManifestSignatureAsync(CancellationToken ct = default)
+            => inner.GetManifestSignatureAsync(ct);
+
+        public Task<Stream> OpenBundleAsync(string url, CancellationToken ct = default)
+        {
+            store.SaveState(UpdateLifecycle.OnBootConfirmed(store.LoadState()));
+            Confirmed = true;
+            return inner.OpenBundleAsync(url, ct);
+        }
+    }
+
     private BundleStore Store() => new(Path.Combine(_work, "appdata"));
 
     private static UpdateCheckRequest Request(string embeddedVersion = "1.0.0")
