@@ -44,7 +44,8 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # Write, only so a successful publish can leave a tag behind.
+      contents: write
       # Required for npm provenance, which signs a verifiable link between the
       # published tarball and the commit + workflow that produced it.
       id-token: write
@@ -60,6 +61,70 @@ jobs:
           cache-dependency-path: |
             src/cli/create-vidra-app/package-lock.json
             src/sdk/vidra-js/package-lock.json
+
+      # npm-publish.sh skips a package that is already on the registry, which is
+      # what lets a "publish both" run work when only one was bumped — and it is
+      # also what makes a re-run at an already-released version skip everything
+      # and report success. Both packages skipping is the case that reads as a
+      # release and is not one, so decide it here, before anything is published.
+      - name: Refuse a run with nothing to publish
+        run: |
+          case "${{ inputs.packages }}" in
+            both) dirs=(src/sdk/vidra-js src/cli/create-vidra-app) ;;
+            sdk)  dirs=(src/sdk/vidra-js) ;;
+            cli)  dirs=(src/cli/create-vidra-app) ;;
+          esac
+          pending=0
+          for dir in "${dirs[@]}"; do
+            spec="$(node -p "const p=require('./$dir/package.json'); p.name + '@' + p.version")"
+            if npm view "$spec" version >/dev/null 2>&1; then
+              echo "  $spec — already on the registry, will be skipped"
+            else
+              echo "  $spec — to publish"
+              pending=$((pending + 1))
+            fi
+          done
+          if [ "$pending" -gt 0 ]; then
+            echo "$pending package(s) to publish"
+            exit 0
+          fi
+          # A dry run that would publish nothing is a useful answer, not a
+          # failure; only the run that claims to be a release has to refuse.
+          if [ "${{ inputs.push }}" != "true" ]; then
+            echo "::warning::nothing to publish: every selected package is already on npm at this version"
+            exit 0
+          fi
+          echo "::error::every selected package is already on npm at this version — run the Bump version workflow before releasing again"
+          exit 1
+
+      # The scaffolded host csproj pins two packages at this exact version from
+      # nuget.org — `{{vidraVersion}}` is the one token that has no monorepo
+      # fallback, so a published CLI whose NuGet half is not out yet scaffolds
+      # apps that cannot restore. That is why the two release workflows are not
+      # interchangeable in order: NuGet first, npm second. 0.4.0 got away with a
+      # two-minute window; it is not a rule, it was luck.
+      #
+      # Both ids are checked, not just one. `dotnet nuget push` pushes nine
+      # packages in one glob and can fail part way, so "one of them is up" is not
+      # the same claim as "the set the template needs is up".
+      - name: The NuGet half has to be out first
+        if: ${{ inputs.push && (inputs.packages == 'both' || inputs.packages == 'cli') }}
+        run: |
+          version="$(node -p "require('./version.json').version")"
+          missing=0
+          for id in vidra.hosting.maui vidra.updates.native; do
+            if curl -sf "https://api.nuget.org/v3-flatcontainer/$id/index.json" \
+                 | jq -e --arg v "$version" '.versions | index($v)' >/dev/null 2>&1; then
+              echo "  $id $version is on nuget.org"
+            else
+              echo "  $id $version is NOT on nuget.org"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::$missing package(s) the scaffolded template pins are not on nuget.org at $version — run Release NuGet first, or every app scaffolded by this CLI will fail to restore"
+            exit 1
+          fi
 
       - name: Publish @vidra-dev/sdk
         if: ${{ inputs.packages == 'both' || inputs.packages == 'sdk' }}
@@ -81,6 +146,13 @@ jobs:
           PUSH: ${{ inputs.push }}
           PROVENANCE: ${{ inputs.provenance }}
         run: bash "$GITHUB_WORKSPACE/tests/ci/npm-publish.sh"
+
+      # See tests/ci/tag-release.sh: nothing has ever tagged a release, so which
+      # commit a published version came from is only recoverable from a run's
+      # timestamp. Both release workflows tag, and neither minds finding it done.
+      - name: Tag the published version
+        if: ${{ inputs.push }}
+        run: bash tests/ci/tag-release.sh
 
       - name: Summary
         if: always()
