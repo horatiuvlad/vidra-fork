@@ -108,8 +108,16 @@ public sealed class UpdateClient(BundleStore store, BundleInstaller? installer =
 
             var identity = new BundleIdentity(
                 entry.Version, request.CoreFingerprint, request.AppFingerprint);
+
+            // Re-read rather than write back the snapshot this check started
+            // from. A download takes as long as the network takes, and the
+            // running app is deciding things about the same file the whole time
+            // — clearing the probation on a bundle that has just proved it
+            // boots, most of all. Writing the pre-download copy would put that
+            // probation back, and a resurrected probation is how a working
+            // bundle gets rolled back.
             var updated = UpdateLifecycle.ForgetUnreferenced(
-                UpdateLifecycle.OnDownloaded(state, entry.Sha256, identity));
+                UpdateLifecycle.OnDownloaded(_store.LoadState(), entry.Sha256, identity));
             _store.SaveState(updated);
             _store.Prune(updated);
 
