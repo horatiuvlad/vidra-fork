@@ -693,7 +693,7 @@ jobs:
             --project "$(native "$PWD")" \
             --cli "$(native "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js")" \
             --signing-key "$(native "$PWD/ota-signing-key.pem")" \
-            --cycles 25 \
+            --cycles 25 --port 8099 \
             --work "$(native "${{ runner.temp }}/ota-boot-work")"
 
       - name: Upload boot-probe results
