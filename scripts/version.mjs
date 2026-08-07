@@ -22,6 +22,28 @@ const SOURCE = path.join(ROOT, "version.json");
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
 
+/** Both places an npm lockfile names its own package's version. */
+const writeLockVersion = (source, version) => {
+  const lock = JSON.parse(source);
+  lock.version = version;
+  if (lock.packages?.[""]) lock.packages[""].version = version;
+  return `${JSON.stringify(lock, null, 2)}\n`;
+};
+
+/**
+ * Read both, and report the disagreement rather than the root value when they
+ * differ — otherwise `check` passes on a lockfile that names two versions of
+ * itself, which is the drift this is here to catch.
+ */
+const readLockVersion = (source) => {
+  const lock = JSON.parse(source);
+  const inner = lock.packages?.[""]?.version;
+  if (inner !== undefined && inner !== lock.version) {
+    return `${lock.version} at the root, ${inner} under packages[""]`;
+  }
+  return lock.version;
+};
+
 /** Files that carry a copy of the version, and how to read/write it. */
 const derived = [
   {
@@ -41,6 +63,22 @@ const derived = [
     file: "src/cli/create-vidra-app/src/theme.ts",
     read: (s) => s.match(/CLI_VERSION = "([^"]+)"/)?.[1],
     write: (s, v) => s.replace(/(CLI_VERSION = ")[^"]+(")/, `$1${v}$2`),
+  },
+  {
+    // A lockfile records the version of the package it locks, in two places.
+    // `npm ci` does not mind if they disagree with package.json and the
+    // published tarball takes its version from package.json either way — so
+    // this drifts silently, which is the one thing version.json exists to stop.
+    // Rewritten by round-trip because npm's own formatting is exactly
+    // JSON.stringify(…, 2) plus a newline.
+    file: "src/cli/create-vidra-app/package-lock.json",
+    read: readLockVersion,
+    write: writeLockVersion,
+  },
+  {
+    file: "src/sdk/vidra-js/package-lock.json",
+    read: readLockVersion,
+    write: writeLockVersion,
   },
   {
     // Every packable csproj resolves <Version> through this property, so the
