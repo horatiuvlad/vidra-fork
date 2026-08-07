@@ -30,6 +30,20 @@ const writeLockVersion = (source, version) => {
   return `${JSON.stringify(lock, null, 2)}\n`;
 };
 
+/**
+ * Read both, and report the disagreement rather than the root value when they
+ * differ — otherwise `check` passes on a lockfile that names two versions of
+ * itself, which is the drift this is here to catch.
+ */
+const readLockVersion = (source) => {
+  const lock = JSON.parse(source);
+  const inner = lock.packages?.[""]?.version;
+  if (inner !== undefined && inner !== lock.version) {
+    return `${lock.version} at the root, ${inner} under packages[""]`;
+  }
+  return lock.version;
+};
+
 /** Files that carry a copy of the version, and how to read/write it. */
 const derived = [
   {
@@ -58,13 +72,13 @@ const derived = [
     // Rewritten by round-trip because npm's own formatting is exactly
     // JSON.stringify(…, 2) plus a newline.
     file: "src/cli/create-vidra-app/package-lock.json",
-    read: (s) => JSON.parse(s).version,
-    write: (s, v) => writeLockVersion(s, v),
+    read: readLockVersion,
+    write: writeLockVersion,
   },
   {
     file: "src/sdk/vidra-js/package-lock.json",
-    read: (s) => JSON.parse(s).version,
-    write: (s, v) => writeLockVersion(s, v),
+    read: readLockVersion,
+    write: writeLockVersion,
   },
   {
     // Every packable csproj resolves <Version> through this property, so the
