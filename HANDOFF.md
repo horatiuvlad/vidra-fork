@@ -49,6 +49,31 @@ claims in that document turned out to be wrong. Both are covered below.
   comment saying so. **It belongs with the 0.5.0 release, where the run that depends
   on it can prove it.** This is the single most important deferred item here.
 
+  The branch that carried it (`fix/release-guards`) was deleted on 2026-08-10 with the
+  rest of the stale branches, so the change is written out here. In
+  `.github/workflows/release-nuget.yml`, replace the pinning step and drop the manifest
+  flag:
+
+  ```yaml
+  # No Xcode pin and no manifest pin, for the reasons ci.yml gives at length: both
+  # were written when the image topped out below the SDK the maccatalyst manifest
+  # wanted, and both inverted once the image shipped 26.6. ci.yml dropped them; this
+  # job kept them, so the packages nuget.org gets were built on a toolchain CI had
+  # already proved does not build them.
+  - name: Log Xcode version (macOS)
+    if: runner.os == 'macOS'
+    run: |
+      xcode-select -p
+      xcodebuild -version
+
+  - name: Install MAUI workload (${{ matrix.maui-workload }})
+    shell: bash
+    run: dotnet workload install ${{ matrix.maui-workload }}
+  ```
+
+  It replaces the `maxim-lobanov/setup-xcode@v1` step pinned to `26.3` and removes
+  `--skip-manifest-update`. Do it in the 0.5.0 release PR, where a real pack run proves it.
+
 ### Corrections to the original work
 
 These were found by exercising the code rather than reading it, and each is now
