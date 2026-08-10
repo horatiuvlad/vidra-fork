@@ -79,6 +79,13 @@ jobs:
       - name: Release publish (first, cold)
         run: dotnet publish "$PROJ" -c Release -f "$TFM" -p:CreatePackage=false
 
+      # The restore no-op check reads project.nuget.cache, not the assets file.
+      # Keeping the universal publish's copy is how the next publish is made to
+      # believe it has nothing to restore while the assets file says otherwise —
+      # the state the failing CI step was in, forced rather than waited for.
+      - name: Keep the publish's restore cache
+        run: cp src/host/Vidra.Host.Maui/obj/project.nuget.cache /tmp/rel.cache
+
       - name: Assets targets after the publish
         run: |
           echo "--- targets in project.assets.json"
@@ -90,6 +97,9 @@ jobs:
       #    to one RID without touching the Release output.
       - name: Debug build again
         run: dotnet build "$PROJ" -c Debug -f "$TFM"
+
+      - name: Put the publish's restore cache back
+        run: cp /tmp/rel.cache src/host/Vidra.Host.Maui/obj/project.nuget.cache
 
       - name: Assets targets after the second Debug build
         run: python3 -c "import json,os;print('\n'.join(json.load(open(os.environ['OBJ']))['targets'].keys()))"
