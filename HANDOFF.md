@@ -50,7 +50,8 @@ claims in that document turned out to be wrong. Both are covered below.
   on it can prove it.** This is the single most important deferred item here.
 
   The branch that carried it (`fix/release-guards`) was deleted on 2026-08-10 with the
-  rest of the stale branches, so the change is written out here. In
+  rest of the stale branches — it survives as the tag `archive/fix/release-guards`
+  (`99391c6`) — and the change is written out here so it needs no archaeology. In
   `.github/workflows/release-nuget.yml`, replace the pinning step and drop the manifest
   flag:
 
