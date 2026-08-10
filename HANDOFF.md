@@ -1,6 +1,7 @@
 # Handoff — release-path PRs, the dependency sweep, and an OTA failure worth chasing
 
-**Date:** 2026-08-07. **Base:** upstream `rzamfiriu/vidra` `main` @ `a38ec4a`.
+**Date:** 2026-08-07, updated 2026-08-10. **Base:** upstream `rzamfiriu/vidra` `main` @
+`e83a27b` (was `a38ec4a` until #20 merged).
 **Where the work lives:** this fork, `horatiuvlad/vidra-fork`.
 
 This branch exists only to carry this file. It is deliberately not on `main` and not
@@ -12,19 +13,26 @@ on any PR branch, so it cannot end up in a diff proposed upstream.
 
 | PR | Branch | Base | State |
 |---|---|---|---|
-| [vidra-fork#13](https://github.com/horatiuvlad/vidra-fork/pull/13) | `pr/release-path` | fork `main` (`a38ec4a`) | green |
-| [vidra-fork#9](https://github.com/horatiuvlad/vidra-fork/pull/9) | `pr/dependency-sweep` | fork `main` | green |
-| [vidra-fork#11](https://github.com/horatiuvlad/vidra-fork/pull/11) | `pr/counter-failure-visible` | fork `main` | green |
-| [rzamfiriu/vidra#20](https://github.com/rzamfiriu/vidra/pull/20) | `fix/ota-smoke-server-timeout` | upstream `main` | green, awaiting review |
+| [vidra-fork#13](https://github.com/horatiuvlad/vidra-fork/pull/13) | `pr/release-path` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
+| [vidra-fork#9](https://github.com/horatiuvlad/vidra-fork/pull/9) | `pr/dependency-sweep` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
+| [vidra-fork#11](https://github.com/horatiuvlad/vidra-fork/pull/11) | `pr/counter-failure-visible` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
+| [vidra-fork#14](https://github.com/horatiuvlad/vidra-fork/pull/14) | `fix/ota-boot-confirmation` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
 
-**Only #20 is upstream. The other three are staged on the fork on purpose** (owner
+**Nothing of ours is open upstream.** All four are staged on the fork on purpose (owner
 directive, 2026-08-07): they settle here first and get promoted later.
+
+Merged upstream, done:
+
+- [rzamfiriu/vidra#20](https://github.com/rzamfiriu/vidra/pull/20)
+  (`fix/ota-smoke-server-timeout`) — approved by `rzamfiriu` and squash-merged
+  2026-08-10 as `e83a27b`. Fork `main` is fast-forwarded to it and the branch is
+  deleted on both sides.
 
 Closed and superseded, do not reopen:
 
 - upstream #16/#17/#18/#19 — withdrawn, moved to the fork as #8/#9/#10/#11.
 - fork #8 and #10 — folded into #13.
-- fork #12 — promoted upstream as #20.
+- fork #12 — promoted upstream as #20, which is now merged.
 
 ## 2. What changed versus the original four PRs
 
