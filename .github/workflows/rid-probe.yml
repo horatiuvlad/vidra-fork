@@ -1,0 +1,125 @@
+name: RID probe (macOS)
+
+# Answers one question and nothing else: does a Debug build followed by an
+# incremental Release publish of the same Catalyst project fail with NETSDK1047?
+#
+# The theory under test: a Release Catalyst publish is universal (it builds
+# maccatalyst-x64 *and* maccatalyst-arm64), a Debug build is single-RID, they
+# share one obj/, and `project.assets.json` is whatever the last restore wrote.
+# A publish that no-ops its restore then reads an assets file that has no x64
+# target and dies in two seconds. That is the shape CI hit on 2026-08-10 at the
+# "Rebuilding a published version" step.
+#
+# Probe branch. Not shipped.
+
+# `workflow_dispatch` only works for workflows that exist on the default branch,
+# and fork `main` has to stay byte-identical to upstream `main`, so this triggers
+# on a push to its own branches instead. `-both` is the same probe with
+# `RuntimeIdentifiers` injected: the candidate fix.
+on:
+  push:
+    branches:
+      - probe/macos-rid
+      - probe/macos-rid-both
+
+env:
+  NUGET_XMLDOC_MODE: skip
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  PROJ: src/host/Vidra.Host.Maui/Vidra.Host.Maui.csproj
+  OBJ: src/host/Vidra.Host.Maui/obj/project.assets.json
+  TFM: net10.0-maccatalyst
+
+jobs:
+  probe:
+    name: RID probe (${{ github.ref_name }})
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.0.x
+
+      - name: Install MAUI workload
+        run: dotnet workload install maui
+
+      - name: Inject RuntimeIdentifiers
+        if: endsWith(github.ref_name, '-both')
+        run: |
+          python3 - "$PROJ" <<'PY'
+          import sys, re
+          p = sys.argv[1]
+          s = open(p).read()
+          line = ("    <RuntimeIdentifiers Condition=\"$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'\">"
+                  "maccatalyst-x64;maccatalyst-arm64</RuntimeIdentifiers>\n")
+          s = s.replace("  <PropertyGroup>\n", "  <PropertyGroup>\n" + line, 1)
+          open(p, "w").write(s)
+          PY
+          grep -n "RuntimeIdentifiers" "$PROJ"
+
+      # 1. Debug, RID-less. Expected to restore for the host RID only.
+      - name: Debug build
+        run: |
+          rm -rf src/tools/Vidra.CodeGen/bin/Debug
+          dotnet build "$PROJ" -c Debug -f "$TFM"
+
+      - name: Assets targets after the Debug build
+        run: |
+          echo "--- targets in project.assets.json"
+          python3 -c "import json,os;print('\n'.join(json.load(open(os.environ['OBJ']))['targets'].keys()))"
+          echo "--- Debug output dirs"
+          ls -1 src/host/Vidra.Host.Maui/bin/Debug/$TFM || true
+
+      # 2. Release publish. Expected to be universal: two inner builds.
+      - name: Release publish (first, cold)
+        run: dotnet publish "$PROJ" -c Release -f "$TFM" -p:CreatePackage=false
+
+      - name: Assets targets after the publish
+        run: |
+          echo "--- targets in project.assets.json"
+          python3 -c "import json,os;print('\n'.join(json.load(open(os.environ['OBJ']))['targets'].keys()))"
+          echo "--- Release output dirs"
+          ls -1 src/host/Vidra.Host.Maui/bin/Release/$TFM || true
+
+      # 3. Debug again: if the theory holds, this narrows the assets file back
+      #    to one RID without touching the Release output.
+      - name: Debug build again
+        run: dotnet build "$PROJ" -c Debug -f "$TFM"
+
+      - name: Assets targets after the second Debug build
+        run: python3 -c "import json,os;print('\n'.join(json.load(open(os.environ['OBJ']))['targets'].keys()))"
+
+      # 4. The publish CI actually failed on: incremental, nothing to rebuild.
+      - name: Release publish (second, incremental) — THE PROBE
+        id: probe
+        continue-on-error: true
+        run: |
+          set +e
+          dotnet publish "$PROJ" -c Release -f "$TFM" -p:CreatePackage=false 2>&1 | tee /tmp/second.log
+          code=${PIPESTATUS[0]}
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          grep -q NETSDK1047 /tmp/second.log && echo "netsdk1047=yes" >> "$GITHUB_OUTPUT" || echo "netsdk1047=no" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: What the app actually contains
+        continue-on-error: true
+        run: |
+          app="$(find src/host/Vidra.Host.Maui/bin/Release/$TFM -maxdepth 3 -name '*.app' -type d -print -quit)"
+          echo "app: ${app:-none}"
+          [ -n "$app" ] || exit 0
+          bin="$(ls "$app/Contents/MacOS" | head -1)"
+          lipo -archs "$app/Contents/MacOS/$bin" || true
+
+      - name: Verdict
+        run: |
+          {
+            echo "## RID probe (${{ github.ref_name }})"
+            echo ""
+            echo "- second publish exit: \`${{ steps.probe.outputs.exit }}\`"
+            echo "- NETSDK1047 seen: \`${{ steps.probe.outputs.netsdk1047 }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
