@@ -1,6 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- Pinned, not inferred: a Release Catalyst publish is universal
+         (maccatalyst-x64 + maccatalyst-arm64) while a Debug build takes
+         the host RID alone, and both share one obj/. Whichever restored
+         last owns project.assets.json, so a publish that no-ops its
+         restore can read an assets file with no x64 target and fail with
+         NETSDK1047. Naming the set here makes every restore write both. -->
+    <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">maccatalyst-x64;maccatalyst-arm64</RuntimeIdentifiers>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('osx'))">net10.0-maccatalyst</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0-windows10.0.19041.0</TargetFrameworks>
     <ValidateXcodeVersion>false</ValidateXcodeVersion>

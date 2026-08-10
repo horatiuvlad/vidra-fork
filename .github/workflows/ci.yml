@@ -521,6 +521,31 @@ jobs:
           [ "$short" = "1.2.3" ] || { echo "::error::expected 1.2.3 from package.json, got $short"; exit 1; }
           [ "$build" = "10203" ] || { echo "::error::expected build 10203, got $build"; exit 1; }
 
+      # The bundle that ships is the one at the TFM root: `stepDotnetPublish`
+      # returns `bin/Release/<tfm>` and `macosTarget.findBundle` reads exactly
+      # that directory, non-recursively, so that is what gets signed, DMG'd and
+      # packed. The Catalyst SDK lipos the per-RID builds into it, which is why
+      # it is universal — and it has to stay that way, because a single RID
+      # pinned anywhere upstream of here would silently ship half an app to
+      # everyone on the other architecture.
+      - name: The packaged app is universal (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        run: |
+          root=src/VidraSmoke.Host/bin/Release/net10.0-maccatalyst
+          app="$(find "$root" -maxdepth 1 -name '*.app' -type d -print -quit)"
+          [ -n "$app" ] || { echo "::error::no .app at $root, which is where the CLI looks"; exit 1; }
+          bin="$app/Contents/MacOS/$(ls "$app/Contents/MacOS" | head -1)"
+          archs="$(lipo -archs "$bin")"
+          echo "$app -> $archs"
+          for want in x86_64 arm64; do
+            case " $archs " in
+              *" $want "*) ;;
+              *) echo "::error::$bin is missing the $want slice (got: $archs)"; exit 1 ;;
+            esac
+          done
+
       - name: The app version reached the artifact name
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
