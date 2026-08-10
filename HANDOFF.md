@@ -13,13 +13,13 @@ on any PR branch, so it cannot end up in a diff proposed upstream.
 
 | PR | Branch | Base | State |
 |---|---|---|---|
-| [vidra-fork#13](https://github.com/horatiuvlad/vidra-fork/pull/13) | `pr/release-path` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
-| [vidra-fork#9](https://github.com/horatiuvlad/vidra-fork/pull/9) | `pr/dependency-sweep` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
-| [vidra-fork#11](https://github.com/horatiuvlad/vidra-fork/pull/11) | `pr/counter-failure-visible` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
-| [vidra-fork#14](https://github.com/horatiuvlad/vidra-fork/pull/14) | `fix/ota-boot-confirmation` | fork `main` (`e83a27b`) | green on `a38ec4a`, rerunning after the rebase |
+| [rzamfiriu/vidra#21](https://github.com/rzamfiriu/vidra/pull/21) | `fix/ota-boot-confirmation` | upstream `main` (`e83a27b`) | promoted 2026-08-10, awaiting review; green on the fork ([31426354886](https://github.com/horatiuvlad/vidra-fork/actions/runs/31426354886)) |
+| [vidra-fork#13](https://github.com/horatiuvlad/vidra-fork/pull/13) | `pr/release-path` | fork `main` (`e83a27b`) | green after the rebase |
+| [vidra-fork#9](https://github.com/horatiuvlad/vidra-fork/pull/9) | `pr/dependency-sweep` | fork `main` (`e83a27b`) | green after the rebase |
+| [vidra-fork#11](https://github.com/horatiuvlad/vidra-fork/pull/11) | `pr/counter-failure-visible` | fork `main` (`e83a27b`) | macOS smoke went red on the rebase run at "Rebuilding a published version skips the pack", `NETSDK1047` on `maccatalyst-x64`; the same publish had passed four times earlier in that job and on the other three branches, so it was rerun |
 
-**Nothing of ours is open upstream.** All four are staged on the fork on purpose (owner
-directive, 2026-08-07): they settle here first and get promoted later.
+**#21 is the only thing of ours open upstream.** The other three are staged on the fork on
+purpose (owner directive, 2026-08-07): they settle here first and get promoted later.
 
 Merged upstream, done:
 
@@ -33,6 +33,7 @@ Closed and superseded, do not reopen:
 - upstream #16/#17/#18/#19 — withdrawn, moved to the fork as #8/#9/#10/#11.
 - fork #8 and #10 — folded into #13.
 - fork #12 — promoted upstream as #20, which is now merged.
+- fork #14 — promoted upstream as #21, same branch and same commit (`3f7dc82`).
 
 ## 2. What changed versus the original four PRs
 
