@@ -1,10 +1,10 @@
 name: Release npm
 
-# Publishes the two npm packages — @vidra-dev/sdk and create-vidra-app — with
+# Publishes the three npm packages — @vidra-dev/sdk, vidra-cli and create-vidra-app — with
 # the same shape as release-nuget.yml: manual, dry-run by default, and gated on
 # the full CI suite.
 #
-# Before this existed, both packages were published by hand with no verification
+# Before this existed, the packages were published by hand with no verification
 # at all. npm, like nuget.org, does not allow re-publishing a version once it is
 # taken, so an unverified publish is not something you can undo.
 #
@@ -13,16 +13,18 @@ name: Release npm
 # `push` checked to publish for real.
 #
 # Requires repository secret: NPM_TOKEN (an npm automation token with publish
-# rights to `create-vidra-app` and the `@vidra-dev` scope).
+# rights to `vidra-cli`, `create-vidra-app` and the `@vidra-dev` scope). vidra-cli
+# is new in 0.5.0: a token restricted to named packages has to be widened to
+# include it, or its first publish fails as a permissions error.
 
 on:
   workflow_dispatch:
     inputs:
       packages:
-        description: "Which packages to publish"
+        description: "Which packages to publish (cli = vidra-cli and create-vidra-app, which pins it)"
         type: choice
-        options: [both, sdk, cli]
-        default: both
+        options: [all, sdk, cli]
+        default: all
       push:
         description: "Publish to npm (otherwise dry-run only)"
         type: boolean
@@ -59,20 +61,20 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
           cache-dependency-path: |
-            src/cli/create-vidra-app/package-lock.json
+            src/cli/package-lock.json
             src/sdk/vidra-js/package-lock.json
 
       # npm-publish.sh skips a package that is already on the registry, which is
-      # what lets a "publish both" run work when only one was bumped — and it is
+      # what lets a "publish all" run work when only some were bumped — and it is
       # also what makes a re-run at an already-released version skip everything
-      # and report success. Both packages skipping is the case that reads as a
+      # and report success. Every package skipping is the case that reads as a
       # release and is not one, so decide it here, before anything is published.
       - name: Refuse a run with nothing to publish
         run: |
           case "${{ inputs.packages }}" in
-            both) dirs=(src/sdk/vidra-js src/cli/create-vidra-app) ;;
-            sdk)  dirs=(src/sdk/vidra-js) ;;
-            cli)  dirs=(src/cli/create-vidra-app) ;;
+            all) dirs=(src/sdk/vidra-js src/cli/vidra-cli src/cli/create-vidra-app) ;;
+            sdk) dirs=(src/sdk/vidra-js) ;;
+            cli) dirs=(src/cli/vidra-cli src/cli/create-vidra-app) ;;
           esac
           pending=0
           for dir in "${dirs[@]}"; do
@@ -108,7 +110,7 @@ jobs:
       # packages in one glob and can fail part way, so "one of them is up" is not
       # the same claim as "the set the template needs is up".
       - name: The NuGet half has to be out first
-        if: ${{ inputs.push && (inputs.packages == 'both' || inputs.packages == 'cli') }}
+        if: ${{ inputs.push && (inputs.packages == 'all' || inputs.packages == 'cli') }}
         run: |
           version="$(node -p "require('./version.json').version")"
           missing=0
@@ -127,7 +129,7 @@ jobs:
           fi
 
       - name: Publish @vidra-dev/sdk
-        if: ${{ inputs.packages == 'both' || inputs.packages == 'sdk' }}
+        if: ${{ inputs.packages == 'all' || inputs.packages == 'sdk' }}
         working-directory: src/sdk/vidra-js
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -135,11 +137,21 @@ jobs:
           PROVENANCE: ${{ inputs.provenance }}
         run: bash "$GITHUB_WORKSPACE/tests/ci/npm-publish.sh"
 
-      # The SDK goes first: a freshly scaffolded app installs the SDK version
-      # the CLI pins, so publishing the CLI first can briefly point users at an
-      # SDK version that does not exist yet.
+      # The SDK goes first, then vidra-cli, then the scaffolder: a freshly
+      # scaffolded app installs the SDK and vidra-cli versions create-vidra-app
+      # pins, so publishing it earlier can briefly point users at versions that
+      # do not exist yet.
+      - name: Publish vidra-cli
+        if: ${{ inputs.packages == 'all' || inputs.packages == 'cli' }}
+        working-directory: src/cli/vidra-cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUSH: ${{ inputs.push }}
+          PROVENANCE: ${{ inputs.provenance }}
+        run: bash "$GITHUB_WORKSPACE/tests/ci/npm-publish.sh"
+
       - name: Publish create-vidra-app
-        if: ${{ inputs.packages == 'both' || inputs.packages == 'cli' }}
+        if: ${{ inputs.packages == 'all' || inputs.packages == 'cli' }}
         working-directory: src/cli/create-vidra-app
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

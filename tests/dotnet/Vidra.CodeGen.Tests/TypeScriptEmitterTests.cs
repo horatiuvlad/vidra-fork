@@ -118,4 +118,23 @@ public sealed class TypeScriptEmitterTests
         output.Should().Contain("changed: eventToken(\"sample\", \"changed\")");
         output.Should().Contain("from \"@vidra-dev/sdk/config/tokens\"");
     }
+
+    // The scaffolded app has no contracts of its own, and its tsconfig sets
+    // noUnusedLocals: an import the catalog never calls fails its UI build.
+    [Fact]
+    public void EmitAccessCatalog_Imports_Only_The_Factories_It_Calls()
+    {
+        var emitter = new TypeScriptEmitter();
+
+        emitter.EmitAccessCatalog(new Manifest()).Should().NotContain("import");
+
+        var methodsOnly = new Manifest();
+        methodsOnly.Contracts["sample"] = new ContractManifest
+        {
+            NativeMethods = { ["echo"] = new MethodManifest() },
+        };
+        emitter.EmitAccessCatalog(methodsOnly).Should()
+            .Contain("import { nativeMethodToken } from")
+            .And.NotContain("eventToken");
+    }
 }

@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "fs-extra";
 import { execFileSync, spawnSync } from "node:child_process";
-import { dim, footer, row, STEP_LABEL_WIDTH, value } from "./theme.js";
+import { dim, footer, row, STEP_LABEL_WIDTH, value } from "@vidra-dev/cli-shared/theme";
 
 /**
  * What a signature is *for* decides which identity we want.

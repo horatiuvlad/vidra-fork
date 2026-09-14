@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "fs-extra";
 import { execFileSync } from "node:child_process";
-import { dim, row, STEP_LABEL_WIDTH, value } from "./theme.js";
+import { dim, row, STEP_LABEL_WIDTH, value } from "@vidra-dev/cli-shared/theme";
 import { formatExecError } from "./signing.js";
 
 /**

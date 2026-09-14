@@ -31,10 +31,10 @@ We follow a pyramid:
 | Unit        | `tests/dotnet/Vidra.Modules.Windowing.Tests`                | `ubuntu-latest`       |
 | Unit        | `tests/dotnet/Vidra.Modules.Essentials.Tests`               | `ubuntu-latest`       |
 | Unit        | `src/sdk/vidra-js` Vitest (`client`, `transport`)           | `ubuntu-latest`       |
-| Unit        | `src/cli/create-vidra-app` Vitest (`utils`, `project`, ...) | `ubuntu-latest`       |
+| Unit        | `src/cli` workspace Vitest (`utils`, `project`, ...)        | `ubuntu-latest`       |
 | Contract    | `tests/contract/fixtures/*.json` via `ContractFixtureTests` | `ubuntu-latest`       |
 | Contract    | Same fixtures via SDK `contract.test.ts`                    | `ubuntu-latest`       |
-| Integration | CLI `scaffold.integration.test.ts` (tmpdir scaffold)        | `ubuntu-latest`       |
+| Integration | `create-vidra-app` `scaffold.integration.test.ts` (tmpdir)  | `ubuntu-latest`       |
 | Integration | `Vidra.CodeGen.AppFixture` build + `VidraCodeGenCheck`      | `ubuntu-latest`       |
 | Integration | `AggregateScope.proj` — multi-assembly, core-scope codegen  | `ubuntu-latest`       |
 | Guard rail  | `scripts/version.mjs check` — one version across npm + NuGet | `ubuntu-latest`       |
@@ -77,8 +77,9 @@ dotnet test tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials
 # SDK
 cd src/sdk/vidra-js && npm install && npm test
 
-# CLI (includes scaffold-into-tmpdir integration)
-cd src/cli/create-vidra-app && npm install && npm test
+# CLI packages: vidra-cli, create-vidra-app and their shared modules, one npm
+# workspace (includes scaffold-into-tmpdir integration)
+cd src/cli && npm install && npm test --workspaces
 
 # Bridge echo-ping smoke (any OS)
 dotnet build tests/dotnet/Vidra.Bridge.Smoke/Vidra.Bridge.Smoke.csproj -c Release
@@ -87,10 +88,10 @@ VIDRA_SMOKE_CONFIG=Release node tests/smoke/echo-ping.mjs
 # Runtime end-to-end: launch a packaged app and prove the bridge works.
 # Run after `vidra build` on the matching OS. See tests/ci/README.md.
 bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg \
-  src/cli/create-vidra-app/dist/cli.js                             # macOS
+  src/cli/vidra-cli/dist/cli.js                             # macOS
 bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
 ./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip `
-  -Cli src\cli\create-vidra-app\dist\cli.js                          # Windows
+  -Cli src\cli\vidra-cli\dist\cli.js                          # Windows
 
 # Dev loop: `vidra dev` + the C# reload-on-save loop (macOS)
 bash tests/ci/dev-loop-smoke.sh <app-dir> <path/to/cli.js> macos

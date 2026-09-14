@@ -74,7 +74,7 @@ waited on.
 # macOS — from a source checkout, after `vidra build --target macos`
 bash tests/ci/macos-selfsigned-identity.sh      # optional: gives a signable identity
 bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg \
-  src/cli/create-vidra-app/dist/cli.js
+  src/cli/vidra-cli/dist/cli.js
 bash tests/ci/launch-macos-app.sh   dist/MyApp-0.1.0-macos.dmg
 ```
 
@@ -82,7 +82,7 @@ bash tests/ci/launch-macos-app.sh   dist/MyApp-0.1.0-macos.dmg
 # Windows
 ./tests/ci/windows-selfsigned-cert.ps1
 ./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip `
-  -Cli src\cli\create-vidra-app\dist\cli.js
+  -Cli src\cli\vidra-cli\dist\cli.js
 ```
 
 To run the E2E proof against your own app, install the harness page yourself:

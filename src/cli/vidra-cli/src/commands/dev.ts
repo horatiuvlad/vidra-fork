@@ -7,8 +7,8 @@ import {
   detectProject,
   type ProjectInfo,
 } from "../project.js";
-import { parseArgs } from "../utils.js";
-import { formatBuildError } from "../exec.js";
+import { parseArgs } from "@vidra-dev/cli-shared/utils";
+import { formatBuildError } from "@vidra-dev/cli-shared/exec";
 import { signMacAppBundleIfPossible } from "../signing.js";
 import { selectDevServerUrl } from "../dev-port.js";
 import {
@@ -17,8 +17,8 @@ import {
   writeFrontendAccessFingerprint,
   VIDRA_CONFIG_FILE,
 } from "../config.js";
+import { ensureMauiWorkload } from "@vidra-dev/cli-shared/dotnet-toolchain";
 import {
-  ensureMauiWorkload,
   looksLikeMissingWorkload,
   looksLikeMissingXcode,
   looksLikeXcodeTooOld,
@@ -38,7 +38,7 @@ import {
   taggedRow,
   value,
   type TagName,
-} from "../theme.js";
+} from "@vidra-dev/cli-shared/theme";
 
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;

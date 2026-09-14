@@ -17,7 +17,7 @@ import {
   row,
   STEP_LABEL_WIDTH as LABEL_WIDTH,
   value,
-} from "../theme.js";
+} from "@vidra-dev/cli-shared/theme";
 
 /**
  * The web-bundle half of `vidra build`, reached as `vidra build --web`.
@@ -326,10 +326,10 @@ const stepSignManifest = (
 
   // Signing with a key the app does not trust produces a feed nobody can
   // install from, which is worth catching here rather than in a support thread.
-  if (configuredKeys.length > 0 && !configuredKeys.includes(publicKey)) {
+  if (publicKeys.length > 0 && !publicKeys.includes(publicKey)) {
     fail(
       "sign feed",
-      `signed with key ${document.keyId}, which is not among the ${configuredKeys.length} ` +
+      `signed with key ${document.keyId}, which is not among the ${publicKeys.length} ` +
         "key(s) in vidra.config.ts — installed apps would reject this feed",
     );
   }

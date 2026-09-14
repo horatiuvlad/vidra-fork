@@ -1,6 +1,6 @@
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { dim, footer, row, STEP_LABEL_WIDTH, value } from "./theme.js";
+import { dim, footer, row, STEP_LABEL_WIDTH, value } from "@vidra-dev/cli-shared/theme";
 import { formatExecError } from "./signing.js";
 
 /**

@@ -6,7 +6,8 @@ import { devCommand, runCommand } from "./commands/dev.js";
 import { runDoctor } from "./doctor.js";
 import { ALL, BUILD, DEV, DOCTOR, KEYGEN, RUN, UPDATES, VERIFY } from "./commands/specs.js";
 import { renderCommandHelp, renderIndex, type CommandSpec } from "./help.js";
-import { CLI_VERSION, dim, row } from "./theme.js";
+import { dim, row } from "@vidra-dev/cli-shared/theme";
+import { CLI_VERSION } from "./cli-version.js";
 
 type Handler = (argv: string[]) => Promise<void> | void;
 

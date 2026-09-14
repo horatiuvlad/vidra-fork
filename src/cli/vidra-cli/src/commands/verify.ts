@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "fs-extra";
-import { parseArgs } from "../utils.js";
+import { parseArgs } from "@vidra-dev/cli-shared/utils";
 import { detectPlatform, detectProject } from "../project.js";
 import {
   assessGatekeeper,
@@ -23,7 +23,7 @@ import {
   row,
   STEP_LABEL_WIDTH as LABEL_WIDTH,
   value,
-} from "../theme.js";
+} from "@vidra-dev/cli-shared/theme";
 
 /**
  * `vidra verify [artifact]` — inspect a built artifact and report whether it is

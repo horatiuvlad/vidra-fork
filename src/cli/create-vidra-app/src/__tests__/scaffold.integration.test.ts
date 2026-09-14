@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { scaffoldDir, type Replacements } from "../scaffold.js";
-import { toPascalCase, toKebabCase, toTitleCase } from "../utils.js";
+import { toPascalCase, toKebabCase, toTitleCase } from "@vidra-dev/cli-shared/utils";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = path.resolve(__dirname, "../..");

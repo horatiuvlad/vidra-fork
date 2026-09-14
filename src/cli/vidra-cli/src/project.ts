@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveAppVersionOrDefault } from "./version.js";
 import fs from "fs-extra";
-import { dim, footer, row } from "./theme.js";
+import { dim, footer, row } from "@vidra-dev/cli-shared/theme";
 
 export interface ProjectInfo {
   root: string;

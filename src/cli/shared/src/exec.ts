@@ -1,9 +1,40 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import { dim, row } from "./theme.js";
 
 const toText = (value: Buffer | string | undefined): string => {
   if (value == null) return "";
   return Buffer.isBuffer(value) ? value.toString() : value;
+};
+
+/** Run a command without a shell and capture its output, never throwing. */
+export interface RunResult {
+  /** The executable was located and spawned (regardless of exit code). */
+  found: boolean;
+  /** Process exited 0. */
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+export const run = (cmd: string, args: string[]): RunResult => {
+  try {
+    const stdout = execFileSync(cmd, args, {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { found: true, ok: true, stdout: stdout ?? "", stderr: "" };
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException & {
+      stdout?: Buffer | string;
+      stderr?: Buffer | string;
+    };
+    return {
+      found: err.code !== "ENOENT",
+      ok: false,
+      stdout: toText(err.stdout),
+      stderr: toText(err.stderr),
+    };
+  }
 };
 
 /**

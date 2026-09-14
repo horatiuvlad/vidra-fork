@@ -1,5 +1,5 @@
 import path from "node:path";
-import { parseArgs } from "../utils.js";
+import { parseArgs } from "@vidra-dev/cli-shared/utils";
 import { detectProject } from "../project.js";
 import {
   resolveFeeds,
@@ -21,7 +21,7 @@ import {
   row,
   STEP_LABEL_WIDTH as LABEL_WIDTH,
   value,
-} from "../theme.js";
+} from "@vidra-dev/cli-shared/theme";
 
 /**
  * `vidra updates` — reading and writing the only switch there is.

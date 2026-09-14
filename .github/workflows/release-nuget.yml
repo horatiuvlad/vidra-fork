@@ -51,25 +51,21 @@ jobs:
           dotnet-version: |
             10.0.x
 
-      # See ci.yml: the macos runner image tops out below the Xcode the newest
-      # maccatalyst manifest wants, so pin the newest available and skip the
-      # manifest update during workload install.
-      #
-      # NOTE: this pin and the one below no longer match ci.yml, which dropped
-      # both when the image moved to Xcode 26.6 and the Catalyst pack started
-      # requiring the 26.5 SDK. So this job packs on a toolchain the suite that
-      # gates it does not use. Deliberately left alone here: it only takes effect
-      # on a real pack run, which no PR exercises, so it belongs with the release
-      # that can prove it rather than with a batch of guards that CI can.
-      - name: Select newest available Xcode (macOS)
+      # No Xcode pin and no manifest pin, for the reasons ci.yml gives at length:
+      # both were written when the image topped out below the SDK the
+      # maccatalyst manifest wanted, and both inverted once the image shipped
+      # 26.6. ci.yml dropped them; this job kept them, so it packed on a
+      # toolchain the suite gating it had already proved does not build the
+      # Catalyst pack. Pack on what verify ran on, and log what that was.
+      - name: Log Xcode version (macOS)
         if: runner.os == 'macOS'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "26.3"
+        run: |
+          xcode-select -p
+          xcodebuild -version
 
       - name: Install MAUI workload (${{ matrix.maui-workload }})
         shell: bash
-        run: dotnet workload install ${{ matrix.maui-workload }} --skip-manifest-update
+        run: dotnet workload install ${{ matrix.maui-workload }}
 
       - name: Pack all Vidra packages (Release)
         shell: bash

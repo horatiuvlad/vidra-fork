@@ -34,12 +34,20 @@ edit(path.join(projectDir, "package.json"), (json) => {
 
 // `feed.app` rather than a bare feed string: this rig tests whole-app updates,
 // and one string would turn the web tier on too.
-edit(path.join(projectDir, "vidra.config.ts"), (source) =>
-  source.replace(
-    'updates: {\n    feed: "",\n  }',
-    `updates: {\n    feed: { app: ${JSON.stringify(feedUrl)} },\n  }`,
-  ),
-);
+//
+// Whatever feed is there is replaced, and everything beside it is kept, as the
+// package.json version of this edit did. The smoke job runs the web OTA rig
+// first, which leaves `feed: { web: ... }` plus the publicKeys it signs with;
+// matching only the template's `feed: ""` left that web feed in place, and the
+// build then tried to merge from a feed server that was not running.
+edit(path.join(projectDir, "vidra.config.ts"), (source) => {
+  const feed = /(updates:\s*\{[^]*?)feed:\s*(?:"[^"]*"|\{[^{}]*\})/;
+  if (!feed.test(source)) {
+    console.error("vidra.config.ts: no updates.feed to point at the native feed");
+    process.exit(1);
+  }
+  return source.replace(feed, `$1feed: { app: ${JSON.stringify(feedUrl)} }`);
+});
 
 // The app has to already carry the updater, or a feed URL alone would not be
 // enough and this whole design would be a lie. Asserted rather than assumed: if

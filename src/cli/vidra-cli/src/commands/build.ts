@@ -1,8 +1,8 @@
 import path from "node:path";
 import fs from "fs-extra";
 import { execSync } from "node:child_process";
-import { parseArgs } from "../utils.js";
-import { formatBuildError, formatProcessError } from "../exec.js";
+import { parseArgs } from "@vidra-dev/cli-shared/utils";
+import { formatBuildError, formatProcessError } from "@vidra-dev/cli-shared/exec";
 import { resolveAppVersion, versionPublishArgs } from "../version.js";
 import {
   resolveFeeds,
@@ -55,8 +55,8 @@ import {
   verifyWindowsSignature,
 } from "../windows-signing.js";
 import { windowsTarget } from "../targets/windows.js";
+import { ensureMauiWorkload } from "@vidra-dev/cli-shared/dotnet-toolchain";
 import {
-  ensureMauiWorkload,
   looksLikeMissingWorkload,
   looksLikeMissingXcode,
   printWorkloadHint,
@@ -72,7 +72,7 @@ import {
   row,
   STEP_LABEL_WIDTH as LABEL_WIDTH,
   value,
-} from "../theme.js";
+} from "@vidra-dev/cli-shared/theme";
 
 const TARGETS: Record<string, BuildTarget> = {
   macos: macosTarget,
@@ -391,7 +391,13 @@ export const buildCommand = async (argv: string[]): Promise<void> => {
   // the app build already produced rather than running Vite twice.
   if (mode === "all" && feeds.web && layout.web) {
     console.log();
-    await stepWebBundle(project, layout.web, feeds, typeof args["sign"] === "string" ? args["sign"] : undefined);
+    await stepWebBundle(
+      project,
+      layout.web,
+      feeds,
+      loadedConfig,
+      typeof args["sign"] === "string" ? args["sign"] : undefined,
+    );
   }
 
   console.log();

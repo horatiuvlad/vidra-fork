@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parseArgs } from "../utils.js";
+import { parseArgs } from "@vidra-dev/cli-shared/utils";
 import { generateKeyPair } from "../manifest-signing.js";
 import { rejectUnknownFlags } from "../help.js";
 import { KEYGEN } from "./specs.js";
@@ -12,7 +12,7 @@ import {
   row,
   STEP_LABEL_WIDTH as LABEL_WIDTH,
   value,
-} from "../theme.js";
+} from "@vidra-dev/cli-shared/theme";
 
 export interface WrittenSigningKey {
   publicKey: string;

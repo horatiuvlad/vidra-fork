@@ -12,6 +12,6 @@
   },
   "devDependencies": {
     "@vidra-dev/sdk": "{{sdkVersion}}",
-    "create-vidra-app": "{{cliVersion}}"
+    "vidra-cli": "{{cliVersion}}"
   }
 }

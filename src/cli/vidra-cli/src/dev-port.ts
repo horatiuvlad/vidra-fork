@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 import prompts from "prompts";
-import { isInteractive } from "./doctor.js";
+import { isInteractive } from "@vidra-dev/cli-shared/utils";
 
 const MIN_PORT = 1;
 const MAX_PORT = 65_535;

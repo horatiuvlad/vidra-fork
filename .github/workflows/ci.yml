@@ -54,7 +54,7 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: |
-            src/cli/create-vidra-app/package-lock.json
+            src/cli/package-lock.json
             src/sdk/vidra-js/package-lock.json
 
       # NuGet restore dominates the per-OS jobs — on Windows the dogfood host
@@ -149,18 +149,34 @@ jobs:
         working-directory: src/sdk/vidra-js
         run: npm test
 
-      # ---- TypeScript CLI ----
+      # The scaffolded app's vidra.config.ts imports @vidra-dev/sdk/config, and
+      # the CLI loads that file for real in the --plan step below. The package
+      # only exports dist/, so an unbuilt SDK surfaces as "Package subpath
+      # './config' is not defined by exports" rather than as a missing file.
+      - name: Build SDK
+        working-directory: src/sdk/vidra-js
+        run: npm run build
+
+      # ---- TypeScript CLI (npm workspace: vidra-cli, create-vidra-app, shared) ----
       - name: Install CLI dependencies
-        working-directory: src/cli/create-vidra-app
+        working-directory: src/cli
         run: npm ci || npm install
 
-      - name: Run CLI tests (unit + scaffold integration)
-        working-directory: src/cli/create-vidra-app
-        run: npm test
+      # tsup bundles without type-checking and vitest transpiles per file, so
+      # neither notices a call with a missing argument or a variable renamed on
+      # one side only. Both reached main that way and failed only in the smoke
+      # legs, minutes later and far from the cause.
+      - name: Type-check CLI packages
+        working-directory: src/cli
+        run: npm run typecheck --workspaces
 
-      - name: Build CLI
-        working-directory: src/cli/create-vidra-app
-        run: npm run build
+      - name: Run CLI tests (unit + scaffold integration)
+        working-directory: src/cli
+        run: npm test --workspaces
+
+      - name: Build CLI packages
+        working-directory: src/cli
+        run: npm run build --workspaces --if-present
 
       # ---- CLI behaviour on an unsupported platform ----
       #
@@ -170,7 +186,7 @@ jobs:
       - name: Assert the CLI rejects Linux as a build target
         run: |
           set +e
-          output=$(node src/cli/create-vidra-app/dist/cli.js build --target linux 2>&1)
+          output=$(node src/cli/vidra-cli/dist/cli.js build --target linux 2>&1)
           code=$?
           set -e
           echo "$output"
@@ -184,7 +200,7 @@ jobs:
       - name: Run vidra doctor
         run: |
           set +e
-          node src/cli/create-vidra-app/dist/cli.js doctor
+          node src/cli/vidra-cli/dist/cli.js doctor
           echo "doctor exit: $?"
 
       # `--plan` returns before the MAUI workload gate, so the preview renders
@@ -196,7 +212,7 @@ jobs:
             plan-smoke --app-id=com.vidra.plansmoke
           cd plan-smoke
           for target in macos windows; do
-            output=$(node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" build --target "$target" --plan)
+            output=$(node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" build --target "$target" --plan)
             echo "$output"
             echo "$output" | grep -q "nothing has run" || {
               echo "::error::--plan for $target did not render the dry-run footer"; exit 1; }
@@ -263,7 +279,7 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: |
-            src/cli/create-vidra-app/package-lock.json
+            src/cli/package-lock.json
             src/sdk/vidra-js/package-lock.json
 
       # NuGet restore dominates the per-OS jobs — on Windows the dogfood host
@@ -352,18 +368,18 @@ jobs:
           npm ci || npm install
           npm run build
 
-      - name: Build and link CLI
+      - name: Build CLI packages
         shell: bash
-        working-directory: src/cli/create-vidra-app
+        working-directory: src/cli
         run: |
           npm ci || npm install
-          npm run build
+          npm run build --workspaces --if-present
 
       - name: Run vidra doctor
         shell: bash
         run: |
           set +e
-          node src/cli/create-vidra-app/dist/cli.js doctor
+          node src/cli/vidra-cli/dist/cli.js doctor
           echo "doctor exit: $?"
 
       # The framework's own dogfood host is the only consumer of the aggregate
@@ -460,7 +476,7 @@ jobs:
         run: |
           bash tests/ci/dev-loop-smoke.sh \
             "${{ runner.temp }}/vidra-smoke" \
-            "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             ${{ matrix.target }}
 
       # ---- Runtime E2E harness ----
@@ -494,7 +510,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }} --plan
 
       # ---- Packaging smoke: run the real `vidra build` end-to-end ----
@@ -502,7 +518,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }} --verbose
 
       # ApplicationDisplayVersion -> CFBundleShortVersionString, and the derived
@@ -581,7 +597,7 @@ jobs:
         shell: bash
         run: |
           bash tests/ci/verify-macos-artifact.sh "$ARTIFACT" \
-            "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
+            "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js"
 
       - name: Launch the packaged app and prove the bridge works (macOS)
         timeout-minutes: 10
@@ -595,7 +611,7 @@ jobs:
         shell: pwsh
         run: |
           ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT" `
-            -Cli "$env:GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
+            -Cli "$env:GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js"
 
       # Uploaded here, while dist/ still holds exactly one file, rather than at
       # the end of the job. Everything below builds the same scaffold again into
@@ -653,7 +669,7 @@ jobs:
           # A real signing key, made by the command a publisher would run. The
           # public half goes into vidra.config.ts, which makes signatures mandatory
           # for this app — so the whole run also proves the signed path works.
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             keygen --out ota-signing-key.pem
           node -e "
             const fs = require('fs');
@@ -684,7 +700,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --app --target ${{ matrix.target }}
 
       - name: Locate the update-enabled app (macOS)
@@ -715,7 +731,7 @@ jobs:
           node "$(native "$GITHUB_WORKSPACE/tests/smoke/ota-e2e.mjs")" \
             --bin "$OTA_BIN" \
             --project "$(native "$PWD")" \
-            --cli "$(native "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js")" \
+            --cli "$(native "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js")" \
             --signing-key "$(native "$PWD/ota-signing-key.pem")" \
             --work "$(native "${{ runner.temp }}/ota-work")"
 
@@ -775,7 +791,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }}
           ls -la dist dist/feed
 
@@ -808,7 +824,7 @@ jobs:
         run: |
           node "$GITHUB_WORKSPACE/tests/ci/native-update-setup.mjs" \
             --project "$PWD" --name VidraSmoke --version 1.0.1
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }}
           ls -la dist/feed
           cat dist/feed/releases*.json
@@ -827,7 +843,7 @@ jobs:
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
           before="$(ls dist/feed | sort | tr '\n' ' ')"
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }} 2>&1 | tee rebuild.log
           grep -qi "already in the feed" rebuild.log || {
             echo "::error::expected the 'already in the feed' skip"; exit 1; }

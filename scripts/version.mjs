@@ -44,10 +44,39 @@ const readLockVersion = (source) => {
   return lock.version;
 };
 
+/**
+ * The CLI workspace keeps one lockfile for its packages, and it records the
+ * version of each published one under its folder name. Both are read, so a
+ * lockfile that moved one CLI package and not the other cannot pass either.
+ */
+const WORKSPACE_PACKAGES = ["vidra-cli", "create-vidra-app"];
+
+const readWorkspaceLockVersion = (source) => {
+  const lock = JSON.parse(source);
+  const versions = WORKSPACE_PACKAGES.map((dir) => lock.packages?.[dir]?.version);
+  if (new Set(versions).size === 1) return versions[0];
+  return WORKSPACE_PACKAGES.map((dir, i) => `${dir} ${versions[i]}`).join(", ");
+};
+
+const writeWorkspaceLockVersion = (source, version) => {
+  const lock = JSON.parse(source);
+  for (const dir of WORKSPACE_PACKAGES) {
+    if (lock.packages?.[dir]) lock.packages[dir].version = version;
+  }
+  return `${JSON.stringify(lock, null, 2)}\n`;
+};
+
 /** Files that carry a copy of the version, and how to read/write it. */
 const derived = [
   {
     file: "src/cli/create-vidra-app/package.json",
+    read: (s) => JSON.parse(s).version,
+    write: (s, v) => s.replace(/("version":\s*")[^"]+(")/, `$1${v}$2`),
+  },
+  {
+    // The scaffolder pins vidra-cli at its own version (it reads the file
+    // above), so the two cannot disagree once both follow version.json.
+    file: "src/cli/vidra-cli/package.json",
     read: (s) => JSON.parse(s).version,
     write: (s, v) => s.replace(/("version":\s*")[^"]+(")/, `$1${v}$2`),
   },
@@ -60,7 +89,7 @@ const derived = [
     // What `vidra --version` and the CLI banner print. It drifted once already
     // (0.3.1 while the package said 0.4.0), because nothing checked it: a
     // version the tool reports about itself has to be derived like every other.
-    file: "src/cli/create-vidra-app/src/theme.ts",
+    file: "src/cli/vidra-cli/src/cli-version.ts",
     read: (s) => s.match(/CLI_VERSION = "([^"]+)"/)?.[1],
     write: (s, v) => s.replace(/(CLI_VERSION = ")[^"]+(")/, `$1${v}$2`),
   },
@@ -71,9 +100,9 @@ const derived = [
     // this drifts silently, which is the one thing version.json exists to stop.
     // Rewritten by round-trip because npm's own formatting is exactly
     // JSON.stringify(…, 2) plus a newline.
-    file: "src/cli/create-vidra-app/package-lock.json",
-    read: readLockVersion,
-    write: writeLockVersion,
+    file: "src/cli/package-lock.json",
+    read: readWorkspaceLockVersion,
+    write: writeWorkspaceLockVersion,
   },
   {
     file: "src/sdk/vidra-js/package-lock.json",

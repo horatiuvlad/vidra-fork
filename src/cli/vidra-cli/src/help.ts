@@ -1,5 +1,6 @@
-import { dim, lime, row, value, wordmark, CLI_VERSION } from "./theme.js";
-import type { ParsedArgs } from "./utils.js";
+import { dim, lime, row, value, wordmark } from "@vidra-dev/cli-shared/theme";
+import { CLI_VERSION } from "./cli-version.js";
+import type { ParsedArgs } from "@vidra-dev/cli-shared/utils";
 
 /**
  * One declaration per command, three things out of it: the global list, the

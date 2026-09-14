@@ -7,6 +7,7 @@
 [Documentation](https://vidra.build/docs/) · [Getting started](https://vidra.build/docs/getting-started/) · [Bridge guide](https://vidra.build/docs/bridge/javascript-to-csharp/)
 
 [![create-vidra-app on npm](https://img.shields.io/npm/v/create-vidra-app?label=create-vidra-app&color=cb3837&logo=npm)](https://www.npmjs.com/package/create-vidra-app)
+[![vidra-cli on npm](https://img.shields.io/npm/v/vidra-cli?label=vidra-cli&color=cb3837&logo=npm)](https://www.npmjs.com/package/vidra-cli)
 [![@vidra-dev/sdk on npm](https://img.shields.io/npm/v/%40vidra-dev%2Fsdk?label=%40vidra-dev%2Fsdk&color=cb3837&logo=npm)](https://www.npmjs.com/package/@vidra-dev/sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 

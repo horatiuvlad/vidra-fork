@@ -4,7 +4,7 @@ import { defineConfig } from "tsup";
 // is inlined here. Its own third-party imports stay external and are listed in
 // this package's dependencies.
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/cli.ts"],
   format: ["esm"],
   target: "node22",
   outDir: "dist",

@@ -1,15 +1,14 @@
 {
-  "name": "create-vidra-app",
+  "name": "vidra-cli",
   "version": "0.5.0",
-  "description": "Scaffold a new Vidra application (React + .NET MAUI)",
+  "description": "The vidra command: dev, build, updates and doctor for Vidra apps (React + .NET MAUI)",
   "type": "module",
   "bin": {
-    "create-vidra-app": "bin/create-vidra-app.mjs"
+    "vidra": "bin/vidra.mjs"
   },
   "files": [
     "bin/",
-    "dist/",
-    "templates/"
+    "dist/"
   ],
   "scripts": {
     "build": "tsup",
@@ -21,7 +20,6 @@
   },
   "keywords": [
     "vidra",
-    "create-vidra-app",
     "dotnet",
     "csharp",
     "dotnet-maui",
@@ -33,12 +31,12 @@
     "desktop",
     "electron-alternative",
     "tauri-alternative",
-    "scaffold"
+    "cli"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rzamfiriu/vidra.git",
-    "directory": "src/cli/create-vidra-app"
+    "directory": "src/cli/vidra-cli"
   },
   "homepage": "https://vidra.build",
   "bugs": {
@@ -51,7 +49,9 @@
   "dependencies": {
     "chalk": "^6.0.0",
     "fs-extra": "^11.2.0",
-    "prompts": "^2.4.2"
+    "jiti": "^2.7.0",
+    "prompts": "^2.4.2",
+    "typescript-compiler-api": "npm:typescript@^5.9.3"
   },
   "devDependencies": {
     "@vidra-dev/cli-shared": "*",

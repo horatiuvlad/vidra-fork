@@ -59,3 +59,8 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
   }
   return args;
 };
+
+export const splitLines = (text: string): string[] => text.split(/\r?\n/);
+
+export const isInteractive = (): boolean =>
+  Boolean(process.stdin.isTTY && process.stdout.isTTY);
