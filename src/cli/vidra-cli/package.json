@@ -46,6 +46,9 @@
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "chalk": "^6.0.0",
     "fs-extra": "^11.2.0",
