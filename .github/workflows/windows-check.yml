@@ -1,0 +1,209 @@
+name: Windows check (published packages)
+
+# A one-off check of the version users actually get: create-vidra-app, vidra-cli
+# and @vidra-dev/sdk from npm, Vidra.* from nuget.org, driven from PowerShell the
+# way the scaffolded README tells a Windows user to. CI covers the same ground
+# from source (locally packed NuGets, git-bash); this covers the published path
+# and the two things CI does not run on Windows: `npm run dev`, and a project
+# path with a space in it.
+
+on:
+  push:
+    branches: [check/windows-0.5.0]
+  workflow_dispatch:
+
+env:
+  NUGET_XMLDOC_MODE: skip
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  VIDRA_VERSION: "0.5.0"
+
+jobs:
+  package:
+    name: Build + launch (${{ matrix.label }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: plain path
+            key: plain
+            parent: C:\vc\plain
+          - label: path with a space
+            key: space
+            parent: C:\vc\my apps
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      APP_PARENT: ${{ matrix.parent }}
+      APP_DIR: ${{ matrix.parent }}\hello-vidra
+      OUT_DIR: C:\vc\out
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install MAUI workload (maui-windows)
+        run: dotnet workload install maui-windows
+
+      - name: Toolchain
+        run: |
+          dotnet --version
+          node --version
+          npm --version
+          dotnet workload list
+          $edge = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
+          Write-Host "WebView2 runtime: $($edge.pv)"
+          [System.Environment]::OSVersion.VersionString
+
+      - name: npx create-vidra-app
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force -Path $env:APP_PARENT, $env:OUT_DIR | Out-Null
+          Set-Location $env:APP_PARENT
+          npx --yes "create-vidra-app@$env:VIDRA_VERSION" hello-vidra --app-id=com.vidra.hellowin
+
+      - name: What the scaffold pinned
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          Get-Content package.json
+          Get-Content NuGet.Config
+          Select-String -Path src\HelloVidra.Host\HelloVidra.Host.csproj -Pattern 'PackageReference'
+          $cli = Get-Content node_modules\vidra-cli\package.json | ConvertFrom-Json
+          $sdk = Get-Content ui\node_modules\@vidra-dev\sdk\package.json | ConvertFrom-Json
+          Write-Host "installed vidra-cli $($cli.version), @vidra-dev/sdk $($sdk.version)"
+          if ($cli.version -ne $env:VIDRA_VERSION -or $sdk.version -ne $env:VIDRA_VERSION) { throw "expected $env:VIDRA_VERSION from npm" }
+
+      - name: npm run doctor
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          npm run doctor
+          Write-Host "doctor exit: $LASTEXITCODE"
+          exit 0
+
+      - name: npm run build
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm run build
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Restored Vidra packages came from nuget.org at the pinned version
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          $assets = Get-Content src\HelloVidra.Host\obj\project.assets.json -Raw | ConvertFrom-Json
+          $vidra = $assets.libraries.PSObject.Properties.Name | Where-Object { $_ -like 'Vidra.*' }
+          $vidra
+          if (-not $vidra) { throw "no Vidra.* packages in the restore graph" }
+          $wrong = $vidra | Where-Object { $_ -notlike "*/$env:VIDRA_VERSION" }
+          if ($wrong) { throw "unexpected versions: $wrong" }
+
+      - name: Launch the packaged app and wait for a bridge round-trip
+        timeout-minutes: 10
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          $zip = Get-ChildItem dist -Filter *.zip | Select-Object -First 1
+          if (-not $zip) { throw "no zip in dist" }
+          $stage = Join-Path $env:APP_PARENT "unzipped app"
+          Expand-Archive -Path $zip.FullName -DestinationPath $stage -Force
+          $exe = Get-ChildItem -Path $stage -Recurse -Filter "*.Host.exe" | Select-Object -First 1
+          Write-Host "==> $($exe.FullName)"
+
+          Write-Host "==> vidra verify (report only: this build is unsigned, as a first build is)"
+          npx vidra verify $exe.FullName
+          Write-Host "verify exit: $LASTEXITCODE"
+
+          $log = Join-Path $env:OUT_DIR "packaged-$env:KEY.log"
+          $process = Start-Process -FilePath $exe.FullName -PassThru `
+            -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          # The unmodified template page calls into JS every 10s and prints the
+          # result, so this line is a real C# -> JS -> C# round-trip.
+          $ok = $false
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Seconds 1
+            if ($process.HasExited) { break }
+            if (-not (Test-Path $log)) { continue }
+            # Opened share-read/write: the app still holds the file.
+            $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite, Delete')
+            try { $text = (New-Object System.IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+            if ($text.Contains('Counter is now')) { $ok = $true; break }
+          }
+          if ($ok) {
+            Start-Sleep -Seconds 2
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save((Join-Path $env:OUT_DIR "packaged-$env:KEY.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          foreach ($f in @($log, "$log.err")) { if (Test-Path $f) { Write-Host "---- $f"; Get-Content $f } }
+          if (-not $process.HasExited) { $process.Kill() } else { Write-Host "exited with $($process.ExitCode)" }
+          if (-not $ok) { throw "the packaged app never completed a bridge round-trip" }
+          Write-Host "==> PASS - the packaged app launched and its bridge answered"
+        env:
+          KEY: ${{ matrix.key }}
+
+      - name: Upload logs and screenshot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.key }}
+          path: C:\vc\out
+          if-no-files-found: ignore
+
+  dev:
+    name: npm run dev + a C# edit
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      APP_DIR: C:\vc\dev\hello-vidra
+      OUT_DIR: C:\vc\out
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install MAUI workload (maui-windows)
+        run: dotnet workload install maui-windows
+
+      - name: npx create-vidra-app
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force -Path C:\vc\dev, $env:OUT_DIR | Out-Null
+          Set-Location C:\vc\dev
+          npx --yes "create-vidra-app@$env:VIDRA_VERSION" hello-vidra --app-id=com.vidra.hellowin
+
+      - name: Smoke the dev loop
+        timeout-minutes: 20
+        env:
+          VIDRA_DEV_LOG: C:\vc\out\dev-session.log
+        run: |
+          ./tests/ci/dev-loop-smoke.ps1 -AppDir $env:APP_DIR `
+            -Cli "$env:APP_DIR\node_modules\vidra-cli\dist\cli.js" `
+            -Screenshot C:\vc\out\dev-session.png
+
+      - name: Upload logs and screenshot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-loop
+          path: C:\vc\out
+          if-no-files-found: ignore
