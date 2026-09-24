@@ -121,6 +121,9 @@ jobs:
           Write-Host "==> vidra verify (report only: this build is unsigned, as a first build is)"
           npx vidra verify $exe.FullName
           Write-Host "verify exit: $LASTEXITCODE"
+          # The runner ends a pwsh step with `exit $LASTEXITCODE`; verify's
+          # expected failure on an unsigned build must not become the step's.
+          $global:LASTEXITCODE = 0
 
           $log = Join-Path $env:OUT_DIR "packaged-$env:KEY.log"
           $process = Start-Process -FilePath $exe.FullName -PassThru `
