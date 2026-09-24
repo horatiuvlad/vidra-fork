@@ -2,7 +2,7 @@ name: Windows scroll check (issue 14)
 
 on:
   push:
-    branches: [check/windows-scroll]
+    branches: [check/windows-scroll, check/windows-scroll-2]
   workflow_dispatch:
 
 env:

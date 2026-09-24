@@ -32,6 +32,24 @@ public static class U32 {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    // The biggest visible top-level window the process owns. Process.MainWindowHandle
+    // can stay zero for a WinUI window, so this does not rely on it.
+    public static IntPtr MainWindowOf(uint pid) {
+        IntPtr best = IntPtr.Zero; long bestArea = 0;
+        EnumWindows((h, l) => {
+            uint p; GetWindowThreadProcessId(h, out p);
+            if (p != pid || !IsWindowVisible(h)) return true;
+            RECT r; GetWindowRect(h, out r);
+            long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
+            if (area > bestArea) { bestArea = area; best = h; }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
 }
 "@
 
@@ -60,23 +78,30 @@ $log = Join-Path $OutDir "scroll-app.log"
 $app = Start-Process -FilePath $Exe -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
 
 try {
-    $ready = $false
+    $ready = $false; $hwnd = [IntPtr]::Zero; $devtools = "not tried"
     for ($i = 0; $i -lt 120; $i++) {
         Start-Sleep -Seconds 1
         if ($app.HasExited) { throw "the app exited with $($app.ExitCode)" }
+        $hwnd = [U32]::MainWindowOf([uint32]$app.Id)
         try {
-            $targets = Invoke-RestMethod http://127.0.0.1:9222/json/list -TimeoutSec 2
-            if ($targets | Where-Object { $_.type -eq "page" -and $_.url -notlike "about:*" }) {
-                $app.Refresh()
-                if ($app.MainWindowHandle -ne [IntPtr]::Zero) { $ready = $true; break }
-            }
-        } catch { }
+            $targets = @(Invoke-RestMethod http://127.0.0.1:9222/json/list -TimeoutSec 2)
+            $devtools = ($targets | ForEach-Object { "$($_.type) $($_.url)" }) -join "; "
+            if (($targets | Where-Object { $_.type -eq "page" -and $_.url -notlike "about:*" }) -and $hwnd -ne [IntPtr]::Zero) { $ready = $true; break }
+        } catch { $devtools = "no answer: $($_.Exception.Message)" }
+        if ($i % 10 -eq 9) { Write-Host "  [$($i + 1)s] window $hwnd; devtools: $devtools" }
     }
-    if (-not $ready) { throw "the app never exposed a page over DevTools with a main window" }
+    if (-not $ready) {
+        Write-Host "---- listening TCP ports and their processes"
+        Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 1024 } |
+            ForEach-Object { "  $($_.LocalAddress):$($_.LocalPort) $((Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName)" }
+        Write-Host "---- msedgewebview2 command lines"
+        Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Select-Object -First 3 |
+            ForEach-Object { "  " + $_.CommandLine.Substring(0, [Math]::Min(400, $_.CommandLine.Length)) }
+        throw "not ready: window $hwnd; devtools: $devtools"
+    }
     # Give React time to render.
     Start-Sleep -Seconds 5
 
-    $hwnd = $app.MainWindowHandle
     # Short enough that the unmodified template (~850px of content) overflows,
     # which is the situation the issue describes: a scrollbar, and no scrolling.
     [U32]::MoveWindow($hwnd, 40, 40, 1000, 520, $true) | Out-Null
