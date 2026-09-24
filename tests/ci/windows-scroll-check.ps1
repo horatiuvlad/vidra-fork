@@ -2,14 +2,15 @@
 #
 # Usage: windows-scroll-check.ps1 -Exe <path\to\App.Host.exe> -OutDir <dir>
 #
-# Uses the scaffolded template unmodified. Launches the app with WebView2's DevTools port open, so the page's scroll
-# position can be read from outside, then scrolls it three ways:
+# Uses the scaffolded template unmodified, in a window short enough that the
+# page overflows it, then scrolls it three ways:
 #   1. a real OS mouse wheel over the window (what a user does),
 #   2. a wheel event injected into the renderer over CDP,
 #   3. a real OS PageDown key press.
-# 1 failing while 2 works would put the bug in WinUI/WebView2 input routing
-# rather than in the page. The page must overflow the window for any of this to
-# mean something, so that is asserted first.
+# The verdict on 1 is read off the screen: the top of the page must move. When
+# WebView2's DevTools port opens, scrollY is reported too, and 2 runs; 1 failing
+# while 2 works would put the bug in WinUI/WebView2 input routing rather than in
+# the page.
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
     [Parameter(Mandatory = $true)][string]$OutDir
@@ -62,6 +63,41 @@ function Shot([string]$Name) {
     $g.Dispose(); $bmp.Dispose()
 }
 
+# A strip of the window's client area, as a bitmap. Top of the page only: the
+# badge and the title, above the counter card whose number changes every 10s.
+function Grab-Strip($hwnd) {
+    $r = New-Object U32+RECT
+    [U32]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+    $w = ($r.Right - $r.Left) - 60; $h = 160
+    $bmp = New-Object System.Drawing.Bitmap $w, $h
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($r.Left + 20, $r.Top + 40, 0, 0, (New-Object System.Drawing.Size $w, $h))
+    $g.Dispose()
+    return $bmp
+}
+
+# Share of sampled pixels that differ between two strips.
+function Diff-Ratio($a, $b) {
+    $n = 0; $d = 0
+    for ($y = 0; $y -lt $a.Height; $y += 3) {
+        for ($x = 0; $x -lt $a.Width; $x += 3) {
+            $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y)
+            $n++
+            if ([Math]::Abs($p.R - $q.R) + [Math]::Abs($p.G - $q.G) + [Math]::Abs($p.B - $q.B) -gt 30) { $d++ }
+        }
+    }
+    return [Math]::Round($d / $n, 4)
+}
+
+function Wheel([int]$Notches) {
+    $step = if ($Notches -lt 0) { 120 } else { -120 }
+    for ($n = 0; $n -lt [Math]::Abs($Notches); $n++) {
+        [U32]::mouse_event(0x0800, 0, 0, $step, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 150
+    }
+    Start-Sleep -Seconds 1
+}
+
 function Page-State {
     $json = & node $cdp eval 'JSON.stringify({ y: Math.round(scrollY), sh: document.scrollingElement.scrollHeight, ih: innerHeight, focus: document.hasFocus(), hit: (document.elementFromPoint(innerWidth/2, innerHeight/2)||{}).tagName })'
     if ($LASTEXITCODE -ne 0) { throw "CDP evaluate failed" }
@@ -73,34 +109,47 @@ function Reset-Scroll {
     Start-Sleep -Milliseconds 500
 }
 
+# WebView2 ignored WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS on the runner (the
+# browser process started without the flag), so the port is also opened through
+# the per-executable policy key, which is the documented way. DevTools is only
+# used to read scrollY; the verdict comes from the screen, so the check stands
+# without it.
+$exeName = Split-Path $Exe -Leaf
+$policy = "HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+New-Item -Path $policy -Force | Out-Null
+New-ItemProperty -Path $policy -Name $exeName -Value "--remote-debugging-port=9222" -PropertyType String -Force | Out-Null
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
+
 $log = Join-Path $OutDir "scroll-app.log"
 $app = Start-Process -FilePath $Exe -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
 
 try {
-    $ready = $false; $hwnd = [IntPtr]::Zero; $devtools = "not tried"
+    # Ready = a window, and the first counter line, which means the page loaded
+    # and React rendered.
+    $hwnd = [IntPtr]::Zero
     for ($i = 0; $i -lt 120; $i++) {
         Start-Sleep -Seconds 1
         if ($app.HasExited) { throw "the app exited with $($app.ExitCode)" }
         $hwnd = [U32]::MainWindowOf([uint32]$app.Id)
-        try {
-            $targets = @(Invoke-RestMethod http://127.0.0.1:9222/json/list -TimeoutSec 2)
-            $devtools = ($targets | ForEach-Object { "$($_.type) $($_.url)" }) -join "; "
-            if (($targets | Where-Object { $_.type -eq "page" -and $_.url -notlike "about:*" }) -and $hwnd -ne [IntPtr]::Zero) { $ready = $true; break }
-        } catch { $devtools = "no answer: $($_.Exception.Message)" }
-        if ($i % 10 -eq 9) { Write-Host "  [$($i + 1)s] window $hwnd; devtools: $devtools" }
+        $fs = $null
+        if (Test-Path $log) {
+            $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite, Delete')
+            try { $text = (New-Object System.IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+            if ($hwnd -ne [IntPtr]::Zero -and $text.Contains("Counter is now")) { break }
+        }
     }
-    if (-not $ready) {
-        Write-Host "---- listening TCP ports and their processes"
-        Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 1024 } |
-            ForEach-Object { "  $($_.LocalAddress):$($_.LocalPort) $((Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName)" }
-        Write-Host "---- msedgewebview2 command lines"
-        Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Select-Object -First 3 |
-            ForEach-Object { "  " + $_.CommandLine.Substring(0, [Math]::Min(400, $_.CommandLine.Length)) }
-        throw "not ready: window $hwnd; devtools: $devtools"
+    if ($hwnd -eq [IntPtr]::Zero) { throw "the app never showed a window" }
+
+    $devtools = $false
+    try {
+        $targets = @(Invoke-RestMethod http://127.0.0.1:9222/json/list -TimeoutSec 3)
+        $devtools = [bool]($targets | Where-Object { $_.type -eq "page" })
+    } catch { }
+    Write-Host "DevTools reachable: $devtools"
+    if (-not $devtools) {
+        Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Select-Object -First 1 |
+            ForEach-Object { Write-Host "  browser: $($_.CommandLine.Substring(0, [Math]::Min(300, $_.CommandLine.Length)))" }
     }
-    # Give React time to render.
-    Start-Sleep -Seconds 5
 
     # Short enough that the unmodified template (~850px of content) overflows,
     # which is the situation the issue describes: a scrollbar, and no scrolling.
@@ -111,69 +160,74 @@ try {
     [U32]::GetWindowRect($hwnd, [ref]$r) | Out-Null
     $cx = [int](($r.Left + $r.Right) / 2); $cy = [int](($r.Top + $r.Bottom) / 2)
     Write-Host "window rect: $($r.Left),$($r.Top) - $($r.Right),$($r.Bottom); centre $cx,$cy"
+    [U32]::SetCursorPos($cx, $cy) | Out-Null
+    Start-Sleep -Milliseconds 500
+    $p = New-Object U32+POINT; $p.X = $cx; $p.Y = $cy
+    $cls = New-Object System.Text.StringBuilder 256
+    [U32]::GetClassName([U32]::WindowFromPoint($p), $cls, 256) | Out-Null
+    Write-Host "window under the cursor: class '$cls'"
 
-    $s0 = Page-State
-    Write-Host "page: scrollHeight $($s0.sh), innerHeight $($s0.ih), scrollY $($s0.y), element at centre $($s0.hit)"
-    if ($s0.sh -le $s0.ih) { throw "the page does not overflow the window, so there is nothing to scroll (test setup problem)" }
+    if ($devtools) {
+        $s0 = Page-State
+        Write-Host "page: scrollHeight $($s0.sh), innerHeight $($s0.ih), scrollY $($s0.y)"
+        if ($s0.sh -le $s0.ih) { throw "the page does not overflow the window, so there is nothing to scroll (test setup problem)" }
+    }
+
+    # Control: with no input the strip must not change, or the comparison
+    # below means nothing.
+    $a = Grab-Strip $hwnd; Start-Sleep -Seconds 2; $b = Grab-Strip $hwnd
+    $idle = Diff-Ratio $a $b
+    Write-Host "idle difference: $idle"
+    if ($idle -gt 0.01) { throw "the page changes on its own ($idle), so a pixel comparison cannot judge scrolling" }
     Shot "scroll-0-before"
 
-    # 1. OS mouse wheel, with the cursor over the window. No click: Windows
-    # routes the wheel to the window under the cursor, as a user's would be.
-    [U32]::SetCursorPos($cx, $cy) | Out-Null
-    Start-Sleep -Milliseconds 300
-    $p = New-Object U32+POINT; $p.X = $cx; $p.Y = $cy
-    $under = [U32]::WindowFromPoint($p)
-    $cls = New-Object System.Text.StringBuilder 256
-    [U32]::GetClassName($under, $cls, 256) | Out-Null
-    Write-Host "window under the cursor: class '$cls'"
-    for ($n = 0; $n -lt 5; $n++) {
-        [U32]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero)   # MOUSEEVENTF_WHEEL, one notch down
-        Start-Sleep -Milliseconds 150
+    # 1. A real OS mouse wheel over the window, five notches down.
+    $before = Grab-Strip $hwnd
+    Wheel 5
+    $after = Grab-Strip $hwnd
+    $wheelDiff = Diff-Ratio $before $after
+    $osWheel = $wheelDiff -gt 0.05
+    $wheelY = if ($devtools) { (Page-State).y } else { "n/a" }
+    Shot "scroll-1-after-os-wheel"
+    Write-Host "OS wheel: strip changed $wheelDiff, scrollY $wheelY"
+
+    # 2. A wheel injected into the renderer, bypassing Windows input routing.
+    $cdpWheel = "n/a"
+    if ($devtools) {
+        Reset-Scroll
+        & node $cdp Input.dispatchMouseEvent (@{ type = "mouseWheel"; x = 300; y = 200; deltaX = 0; deltaY = 600 } | ConvertTo-Json -Compress) | Out-Null
+        Start-Sleep -Seconds 1
+        $cdpWheel = (Page-State).y -gt 0
+        Write-Host "CDP wheel scrolled: $cdpWheel"
     }
-    Start-Sleep -Seconds 1
-    $s1 = Page-State
-    Shot "scroll-1-os-wheel"
-    $osWheel = $s1.y -gt $s0.y
-    Write-Host "OS wheel: scrollY $($s0.y) -> $($s1.y)"
 
-    # 2. The same wheel, injected into the renderer.
-    Reset-Scroll
-    & node $cdp Input.dispatchMouseEvent (@{ type = "mouseWheel"; x = [int]($s0.ih / 2); y = [int]($s0.ih / 2); deltaX = 0; deltaY = 600 } | ConvertTo-Json -Compress) | Out-Null
-    Start-Sleep -Seconds 1
-    $s2 = Page-State
-    $cdpWheel = $s2.y -gt 0
-    Write-Host "CDP wheel: scrollY 0 -> $($s2.y)"
-
-    # 3. OS keyboard. Informational: it depends on the WebView holding keyboard
+    # 3. A real OS PageDown. Informational: it needs the WebView to hold keyboard
     # focus, which nothing here arranges beyond bringing the window forward.
-    Reset-Scroll
+    if ($devtools) { Reset-Scroll } else { Wheel -20 }
     [U32]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep -Milliseconds 300
+    $before = Grab-Strip $hwnd
     [System.Windows.Forms.SendKeys]::SendWait("{PGDN}")
     Start-Sleep -Seconds 1
-    $s3 = Page-State
-    $osKey = $s3.y -gt 0
-    Write-Host "OS PageDown: scrollY 0 -> $($s3.y) (page has focus: $($s3.focus))"
+    $keyDiff = Diff-Ratio $before (Grab-Strip $hwnd)
+    Write-Host "OS PageDown: strip changed $keyDiff"
 
-    Write-Host ""
-    Write-Host "| input | scrolled |"
-    Write-Host "|---|---|"
-    Write-Host "| OS mouse wheel over the window | $osWheel |"
-    Write-Host "| wheel injected into the renderer (CDP) | $cdpWheel |"
-    Write-Host "| OS PageDown | $osKey |"
-    @"
+    $summary = @"
 ### Scroll on Windows (issue #14, item 1)
 
-| input | scrolled |
+| input | result |
 |---|---|
-| OS mouse wheel over the window | $osWheel |
-| wheel injected into the renderer (CDP) | $cdpWheel |
-| OS PageDown | $osKey |
-"@ | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+| no input (control) | strip changed $idle |
+| OS mouse wheel, 5 notches | strip changed $wheelDiff, scrollY $wheelY -> **scrolled: $osWheel** |
+| wheel injected into the renderer (CDP) | scrolled: $cdpWheel |
+| OS PageDown | strip changed $keyDiff |
+"@
+    Write-Host $summary
+    $summary | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
 
     if (-not $osWheel) { throw "a real mouse wheel does not scroll the packaged app" }
     Write-Host "==> PASS - the packaged app scrolls with a real mouse wheel"
 } finally {
     if (-not $app.HasExited) { $app.Kill() }
-    foreach ($f in @($log, "$log.err")) { if (Test-Path $f) { Write-Host "---- $f"; Get-Content $f | Select-Object -Last 30 } }
+    foreach ($f in @($log, "$log.err")) { if (Test-Path $f) { Write-Host "---- $f"; Get-Content $f | Select-Object -Last 5 } }
 }
