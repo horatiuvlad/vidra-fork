@@ -93,7 +93,7 @@ public class VidraPage : ContentPage
     {
         if (AppWebView.Handler is not null)
         {
-            AppWebView.Source = new UrlWebViewSource { Url = url };
+            Navigate(url);
             return;
         }
 
@@ -104,10 +104,47 @@ public class VidraPage : ContentPage
                 return;
 
             AppWebView.HandlerChanged -= onHandlerChanged;
-            AppWebView.Source = new UrlWebViewSource { Url = url };
+            Navigate(url);
         };
         AppWebView.HandlerChanged += onHandlerChanged;
     }
+
+#if WINDOWS
+    /// <summary>
+    /// Navigates once the WebView2 has its CoreWebView2, the order
+    /// <c>LoadProductionAssetsCore</c> already follows on Windows.
+    /// </summary>
+    /// <remarks>
+    /// The bridge's Windows channel starts <c>EnsureCoreWebView2Async</c> from
+    /// its own <c>HandlerChanged</c> handler, which runs before this page's. A
+    /// <c>Source</c> set while that initialization is still pending is kept by
+    /// the control and never navigated: measured on Windows 11 with WebView2
+    /// 155, <c>WebView2.Source</c> read the dev server's URL for 48 seconds
+    /// while <c>CoreWebView2.Source</c> stayed <c>about:blank</c>, no
+    /// <c>Navigating</c> was raised, the window stayed blank and every C# to
+    /// JavaScript call timed out. Waiting for the same initialization first
+    /// makes the assignment an ordinary navigation.
+    /// </remarks>
+    private async void Navigate(string url)
+    {
+        if (AppWebView.Handler?.PlatformView is Microsoft.UI.Xaml.Controls.WebView2 webView2)
+        {
+            try
+            {
+                await webView2.EnsureCoreWebView2Async();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[vidra] WebView2 did not initialize ({ex.Message}); navigating to {url} anyway");
+            }
+        }
+
+        AppWebView.Source = new UrlWebViewSource { Url = url };
+    }
+#else
+    private void Navigate(string url) =>
+        AppWebView.Source = new UrlWebViewSource { Url = url };
+#endif
 
     protected override bool OnBackButtonPressed()
     {
