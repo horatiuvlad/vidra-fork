@@ -18,6 +18,7 @@ ever launched the app.
 | `launch-windows-app.ps1` | Windows | Unzips, checks the Authenticode signature, launches, and asserts the same |
 | `smoke-build.sh` | the target's own OS (Android: any) | Builds the smoke app as CI does: SDK, CLI, local packages, scaffold, then `vidra build --target android\|macos\|windows` (a signed APK and AAB, a `.dmg`, a `.zip`). With `--ota-feed` the Android build is CI's OTA one; without, the plain template the [Maestro flows](../maestro/README.md) drive. The `android-emulator` job builds with it |
 | `dev-loop-smoke.sh` | macOS | Starts `vidra dev` and asserts the loop works: Vite serves, the host builds under `dotnet watch`, the app reaches readiness, and a C# edit brings it back up |
+| `dev-loop-smoke.ps1` | Windows | The same dev-loop proof in PowerShell, which tears the session down with `taskkill /T` where the bash script needs POSIX process groups: `vidra dev` starts, the app launches, the bridge answers, a C# edit reaches it; `-Screenshot` saves the desktop |
 | `npm-publish.sh` | any | Publishes an npm package idempotently (used by `release-npm.yml`) |
 
 ## Why self-signed certificates work here
