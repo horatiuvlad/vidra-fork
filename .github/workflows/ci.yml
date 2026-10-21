@@ -975,62 +975,14 @@ jobs:
       - name: Install Android workload
         run: dotnet workload install maui-android
 
-      - name: Build SDK, CLI, and local packages
-        run: |
-          npm ci --prefix src/sdk/vidra-js || npm install --prefix src/sdk/vidra-js
-          npm run build --prefix src/sdk/vidra-js
-          npm ci --prefix src/cli || npm install --prefix src/cli
-          npm run build --prefix src/cli --workspaces --if-present
-          ./pack-local.sh
-
-      - name: Scaffold Android smoke app
-        working-directory: ${{ runner.temp }}
-        run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/index.js" \
-            vidra-smoke --app-id=com.vidra.smoke
-          sed 's/__PROJECT_NAMESPACE__/VidraSmoke/' \
-            "$GITHUB_WORKSPACE/tests/smoke/ota-main-page.cs.in" \
-            > vidra-smoke/src/VidraSmoke.Host/MainPage.cs
-          (
-          cd vidra-smoke
-          node -e "
-            const fs = require('fs');
-            const config = fs.readFileSync('vidra.config.ts', 'utf8');
-            fs.writeFileSync(
-              'vidra.config.ts',
-              config.replace(
-                /updates:\\s*\\{\\s*feed:\\s*\"\"\\s*,?\\s*\\}/,
-                'updates: { feed: { web: \"http://127.0.0.1:8099/\" } }',
-              ),
-            );
-          "
-          )
-          npm ci --prefix vidra-smoke
-          npm ci --prefix vidra-smoke/ui
-
-      - name: Create Android release keystore
-        run: |
-          keytool -genkeypair -v \
-            -keystore "${{ runner.temp }}/vidra-release.jks" \
-            -storepass android -keypass android -alias release \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Vidra CI,O=Vidra,C=US"
-
+      # The same script builds this app on a developer's machine, so the two
+      # cannot drift: SDK, CLI and local packages, the scaffold with the OTA
+      # page and feed, a throwaway keystore, the signed APK and AAB.
       - name: Build signed APK and AAB
-        working-directory: ${{ runner.temp }}/vidra-smoke
-        env:
-          VIDRA_ANDROID_KEYSTORE: ${{ runner.temp }}/vidra-release.jks
-          VIDRA_ANDROID_KEY_ALIAS: release
-          VIDRA_ANDROID_KEY_PASSWORD: android
-          VIDRA_ANDROID_STORE_PASSWORD: android
-          # Intent-extra controls stay gated by the manifest debuggable flag;
-          # this release-shaped smoke opts in explicitly.
-          VIDRA_ANDROID_DEBUGGABLE: "1"
-        run: |
-          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
-            build --target android --app
-          test -n "$(ls dist/*-android.apk)"
-          test -n "$(ls dist/*-android.aab)"
+        run: >-
+          bash tests/ci/android-smoke-build.sh
+          --work "${{ runner.temp }}"
+          --ota-feed http://127.0.0.1:8099/
 
       - name: Launch and prove bridge + OTA promotion/rollback
         uses: reactivecircus/android-emulator-runner@v2
