@@ -1,0 +1,112 @@
+# The scaffolded template on an Android device, driven the way a person uses it.
+# See README.md in this directory for how to build and install the app first.
+appId: com.vidra.smoke
+name: Template smoke (Android)
+# The UI lives in a WebView, which Android's accessibility tree does not expose.
+# Maestro reads it through Chrome DevTools instead, which the debuggable build
+# (VIDRA_ANDROID_DEBUGGABLE=1) turns on.
+androidWebViewHierarchy: devtools
+tags:
+  - android
+---
+# A first launch: no data, and the notification permission not yet asked.
+- launchApp:
+    clearState: true
+    permissions:
+      notifications: unset
+- extendedWaitUntil:
+    visible: "Vidra Smoke"
+    timeout: 60000
+- takeScreenshot: 01-launched
+
+# C# to JS: the host calls the page's counter handler every 10 s and logs the
+# value the page returns, so a number above 0 on screen is a bridge round-trip.
+# The number is its own node in Android's accessibility tree when that tree is
+# populated, and the end of its card's text in the DevTools one; the selectors
+# below match either.
+- extendedWaitUntil:
+    visible: "(.*every 10s)?[1-9][0-9]*"
+    timeout: 30000
+- takeScreenshot: 02-counter
+
+# JS to C#: native modules answer through the bridge.
+- tapOn: "Get App Info"
+- extendedWaitUntil:
+    visible: "Vidra Smoke v0\\.1\\.0 on Android"
+    timeout: 10000
+# The clipboard module answers (Maestro's setClipboard is its own, not the
+# device's, so what it reads is whatever the device holds).
+- tapOn: "Read Clipboard"
+- extendedWaitUntil:
+    visible: "Clipboard: .+"
+    timeout: 10000
+
+# appWindow.getSupport() offers only getCurrent on Android, so the template
+# hides every desktop window control.
+- assertVisible: "Get Window Info"
+- assertNotVisible: "Rename Window"
+- assertNotVisible: "Resize Window"
+- assertNotVisible: "Center Window"
+- assertNotVisible: "Maximize Window"
+- assertNotVisible: "Minimize Window"
+- tapOn: "Get Window Info"
+- extendedWaitUntil:
+    visible: "Current window: .*"
+    timeout: 10000
+- takeScreenshot: 03-bridge
+
+# Notifications: API 33 and later ask for the permission at the first request.
+- tapOn: "Send Notification"
+- extendedWaitUntil:
+    visible: "Allow"
+    timeout: 10000
+- takeScreenshot: 04-permission-prompt
+- tapOn: "Allow"
+- extendedWaitUntil:
+    visible: "Notification sent\\."
+    timeout: 10000
+# The status bar's icon for it carries the notification's text.
+- extendedWaitUntil:
+    visible: "Vidra Smoke notification: Counter is [0-9]+\\. Sent from the native notifications module\\."
+    timeout: 10000
+- takeScreenshot: 05-notification
+
+# Rotation keeps the WebView: the page's state survives it. A recreated page
+# would show 0 again, then 1.
+- extendedWaitUntil:
+    visible: "(.*every 10s)?([2-9]|[1-9][0-9]+)"
+    timeout: 30000
+- setOrientation: landscape_left
+- waitForAnimationToEnd
+- takeScreenshot: 06-landscape
+- assertVisible: "Vidra Smoke"
+- assertVisible: "(.*every 10s)?([2-9]|[1-9][0-9]+)"
+- assertNotVisible: "(.*every 10s)?[01]"
+- setOrientation: portrait
+- waitForAnimationToEnd
+- assertVisible: "Notification sent\\."
+
+# Background and resume: the same page comes back, still counting.
+# (Not "Vidra Smoke": a launcher shows that under the app's icon.)
+- pressKey: home
+- assertNotVisible: "Get App Info"
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Notification sent\\."
+    timeout: 10000
+- assertVisible: "(.*every 10s)?([2-9]|[1-9][0-9]+)"
+- takeScreenshot: 07-resumed
+
+# Back with no page history leaves the app; launching it again starts cleanly.
+- pressKey: back
+- assertNotVisible: "Get App Info"
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: "Vidra Smoke"
+    timeout: 60000
+- extendedWaitUntil:
+    visible: "(.*every 10s)?[1-9][0-9]*"
+    timeout: 30000
+- takeScreenshot: 08-relaunched
