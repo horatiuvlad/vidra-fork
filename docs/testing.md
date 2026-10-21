@@ -104,9 +104,9 @@ bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
 # Dev loop: `vidra dev` + the C# reload-on-save loop (macOS)
 bash tests/ci/dev-loop-smoke.sh <app-dir> <path/to/cli.js> macos
 
-# Android: the signed smoke APK, as the android-emulator job builds it, then the
-# template's device flows on an emulator (tests/maestro/README.md)
-bash tests/ci/android-smoke-build.sh
+# The smoke app as CI builds it, for one target (prints the APK, .dmg or .zip);
+# on Android, then the template's device flows on an emulator (tests/maestro/README.md)
+bash tests/ci/smoke-build.sh --target android|macos|windows
 adb install -r <the APK it printed> && maestro test tests/maestro/
 ```
 

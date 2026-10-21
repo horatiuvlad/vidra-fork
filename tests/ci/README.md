@@ -16,7 +16,7 @@ ever launched the app.
 | `verify-macos-artifact.sh` | macOS | Asserts the signature, hardened runtime and entitlements of a built `.dmg` |
 | `launch-macos-app.sh` | macOS | Mounts the `.dmg`, launches the app, and asserts a real bridge round-trip |
 | `launch-windows-app.ps1` | Windows | Unzips, checks the Authenticode signature, launches, and asserts the same |
-| `android-smoke-build.sh` | any (Android SDK) | Builds the Android smoke app as the `android-emulator` job does: SDK, CLI, local packages, scaffold, signed APK and AAB. With `--ota-feed` it is CI's OTA build; without, the plain template the [Maestro flows](../maestro/README.md) drive |
+| `smoke-build.sh` | the target's own OS (Android: any) | Builds the smoke app as CI does: SDK, CLI, local packages, scaffold, then `vidra build --target android\|macos\|windows` (a signed APK and AAB, a `.dmg`, a `.zip`). With `--ota-feed` the Android build is CI's OTA one; without, the plain template the [Maestro flows](../maestro/README.md) drive. The `android-emulator` job builds with it |
 | `dev-loop-smoke.sh` | macOS | Starts `vidra dev` and asserts the loop works: Vite serves, the host builds under `dotnet watch`, the app reaches readiness, and a C# edit brings it back up |
 | `npm-publish.sh` | any | Publishes an npm package idempotently (used by `release-npm.yml`) |
 

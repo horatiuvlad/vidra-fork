@@ -11,7 +11,7 @@ with the app on a device.
 ```bash
 # Build the template app (com.vidra.smoke) as CI builds its Android smoke app,
 # without CI's OTA page, so it is the template as a user gets it.
-bash tests/ci/android-smoke-build.sh            # prints the APK's path last
+bash tests/ci/smoke-build.sh --target android   # prints the APK's path last
 
 adb install -r <that apk>
 maestro test tests/maestro/
@@ -38,7 +38,7 @@ written against API 34 (Android 14) and API 35 (Android 15) emulators,
 The UI is a WebView, which Android's accessibility tree does not expose, so
 the flow sets `androidWebViewHierarchy: devtools`: Maestro reads the page
 through Chrome DevTools, which a debuggable build turns on
-(`VIDRA_ANDROID_DEBUGGABLE=1`, as `android-smoke-build.sh` builds it).
+(`VIDRA_ANDROID_DEBUGGABLE=1`, as `smoke-build.sh` builds it).
 
 Not covered here, and still manual (`docs/testing.md`): picker files copied
 into the app's cache (the template has no picker), web-bundle promotion and

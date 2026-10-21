@@ -980,7 +980,7 @@ jobs:
       # page and feed, a throwaway keystore, the signed APK and AAB.
       - name: Build signed APK and AAB
         run: >-
-          bash tests/ci/android-smoke-build.sh
+          bash tests/ci/smoke-build.sh --target android
           --work "${{ runner.temp }}"
           --ota-feed http://127.0.0.1:8099/
 
