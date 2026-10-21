@@ -42,7 +42,6 @@ public sealed partial class AppWindowService : IAppWindowService
 
         return MainThread.InvokeOnMainThreadAsync(() =>
         {
-            EnsureSupported(BuildSupportSnapshot().Center, "Window centering");
             var window = GetTrackedWindow();
             return SnapshotWindow(window);
         });
@@ -105,6 +104,7 @@ public sealed partial class AppWindowService : IAppWindowService
 
         return MainThread.InvokeOnMainThreadAsync(() =>
         {
+            EnsureSupported(BuildSupportSnapshot().Center, "Window centering");
             var window = GetTrackedWindow();
             CenterPlatformWindow(window);
             return SnapshotWindow(window);
