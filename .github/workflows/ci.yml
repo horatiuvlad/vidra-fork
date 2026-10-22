@@ -465,9 +465,9 @@ jobs:
       # template page (the E2E variant exits the process on success, which would
       # end the dev session immediately).
       #
-      # macOS only for now: the script tears the session down via POSIX process
-      # groups, which git-bash on the Windows runner does not provide. Windows
-      # dev-loop coverage needs a PowerShell counterpart.
+      # The bash script tears the session down via POSIX process groups, which
+      # git-bash on the Windows runner does not provide, so Windows runs its
+      # PowerShell counterpart in the next step.
       #
       # Every check in the script is a hard assertion, including the two that
       # used to be warnings — the app reaching readiness, and coming back up
@@ -483,6 +483,33 @@ jobs:
             "${{ runner.temp }}/vidra-smoke" \
             "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             ${{ matrix.target }}
+
+      # The same checks on Windows, where the session runs under one cmd.exe that
+      # `taskkill /T` takes down. Both scripts require the page to answer a
+      # C# -> JS call, at start and after the relaunch for a bridge policy edit:
+      # readiness and the C# edit marker are printed by the host alone, so a
+      # WebView that never loads its page passes them. That is how `vidra dev`
+      # stopped working on Windows without CI noticing.
+      - name: Smoke the dev loop on Windows (vidra dev, a C# edit, a policy edit)
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          VIDRA_DEV_LOG: ${{ runner.temp }}\vidra-dev-session.log
+        run: |
+          ./tests/ci/dev-loop-smoke.ps1 -AppDir "${{ runner.temp }}\vidra-smoke" `
+            -Cli "$env:GITHUB_WORKSPACE\src\cli\vidra-cli\dist\cli.js" `
+            -Screenshot "${{ runner.temp }}\vidra-dev-session.png"
+
+      - name: Upload the Windows dev session
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: vidra-dev-session-windows
+          path: |
+            ${{ runner.temp }}/vidra-dev-session.log
+            ${{ runner.temp }}/vidra-dev-session.png
+          if-no-files-found: ignore
 
       # ---- Runtime E2E harness ----
       #

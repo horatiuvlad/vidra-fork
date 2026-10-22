@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Exercise `vidra dev` end to end: Vite starts, the host builds under
-# `dotnet watch`, the app actually launches, and a C# edit puts a fresh build of
-# it back on screen.
+# `dotnet watch`, the app actually launches and its page answers the bridge, and
+# a C# edit puts a fresh build of it back on screen.
 #
 # Usage: dev-loop-smoke.sh <path/to/scaffolded/app> <path/to/cli.js> <macos|windows>
 #
@@ -45,8 +45,16 @@ export DOTNET_USE_POLLING_FILE_WATCHER="${DOTNET_USE_POLLING_FILE_WATCHER:-1}"
 
 # The CLI prints this once per launch, and only after the host process itself
 # printed the `[vidra] host ready` sentinel from VidraPage — so it means the app
-# got as far as loading its page, not merely that a process was spawned.
+# got as far as constructing its page, not merely that a process was spawned.
+# It does not mean the page loaded: VidraPage prints it before the WebView has
+# navigated anywhere. That is what the counter round trip below is for.
 READY_LINE='host ready'
+
+# The template's MainPage calls the page's `counter.increment` every 10s and
+# prints the result. Readiness and the edit marker are both printed by the host
+# alone, so this is the one line here that the page itself has to answer for: a
+# WebView that never loads its page passes every other check in this script.
+COUNTER_LINE='[MainPage] Counter is now'
 
 LOG="$(mktemp)"
 cd "$APP_DIR"
@@ -88,6 +96,28 @@ wait_for_ready() {
   return 1
 }
 
+# The log line of the latest ready report from the CLI. Output after it comes
+# from the newest host only: the CLI waits for the old one to exit first.
+last_ready_line() {
+  grep -n "$READY_LINE" "$LOG" | grep -v '\[vidra\]' | tail -1 | cut -d: -f1
+}
+
+# Waits up to 60s for a counter line at or after log line $1, which needs a
+# C# -> JS -> C# round trip through the page. Fails the run without one. A tick
+# that fails first (the page still loading) is not fatal if a later one lands.
+require_round_trip() {
+  local from="$1" what="$2" waited=0
+  while [ "$waited" -lt 60 ]; do
+    tail -n +"$from" "$LOG" | grep -qF "$COUNTER_LINE" && return 0
+    kill -0 "$DEV_PID" 2>/dev/null || break
+    sleep 2
+    waited=$((waited + 2))
+  done
+  echo "::error::no C# -> JS round trip $what (the page never answered the counter)"
+  dump_log
+  exit 1
+}
+
 echo "==> starting: vidra dev --target $TARGET"
 # `setsid` is util-linux and does not exist on macOS. Enabling job control makes
 # bash place the background job in its own process group with the child as
@@ -107,6 +137,9 @@ echo "==> host ready"
 grep -q "vite ready" "$LOG" \
   || { echo "::error::Vite never reported ready"; dump_log; exit 1; }
 echo "==> vite ready"
+
+require_round_trip 1 "within 60s of readiness"
+echo "==> bridge round trip in the dev session"
 
 # Inject a line into a method the app runs every few seconds, then require the
 # running app to print it. A comment-only edit would prove nothing here: under
@@ -197,6 +230,9 @@ grep -q "vidra.config.ts updated — rebuilding and relaunching the host" "$LOG"
   || { echo "::error::the CLI did not report the bridge policy relaunch"; dump_log; exit 1; }
 echo "==> bridge policy rebuilt into a relaunched host (~${waited}s)"
 
+require_round_trip "$(( $(last_ready_line) + 1 ))" "from the relaunched host within 60s"
+echo "==> bridge round trip in the relaunched host"
+
 # Ctrl-C must not return while the detached dotnet-watch process group is still
 # alive. Capture its leader before shutdown so this checks the exact process
 # the CLI owned rather than relying on a broad process-name search.
@@ -223,4 +259,4 @@ fi
 DEV_PID=""
 echo "==> Ctrl-C reaped dotnet watch (~${waited}s)"
 
-echo "==> PASS — dev session starts, reloads code and policy, and shuts down cleanly"
+echo "==> PASS — dev session starts, its page answers the bridge, reloads code and policy, and shuts down cleanly"
