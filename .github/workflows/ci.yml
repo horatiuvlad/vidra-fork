@@ -54,7 +54,7 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: |
-            src/cli/create-vidra-app/package-lock.json
+            src/cli/package-lock.json
             src/sdk/vidra-js/package-lock.json
 
       # NuGet restore dominates the per-OS jobs — on Windows the dogfood host
@@ -111,6 +111,9 @@ jobs:
           # Multi-assembly, core-scope codegen — the shape the dogfood host uses,
           # exercised here so it isn't only covered by the two platform jobs.
           dotnet msbuild tests/dotnet/Vidra.CodeGen.AppFixture/AggregateScope.proj -t:VerifyAggregateCodeGen
+          # The reference directories codegen probes reach it quoted; one ending in
+          # a backslash breaks the whole command line on Windows.
+          dotnet msbuild tests/dotnet/Vidra.CodeGen.AppFixture/ProbeArguments.proj -t:VerifyProbeArguments
 
       - name: Run Vidra.Modules.FileSystem.Tests
         run: dotnet test tests/dotnet/Vidra.Modules.FileSystem.Tests/Vidra.Modules.FileSystem.Tests.csproj -c Release --no-build --logger "trx;LogFileName=modules-filesystem.trx"
@@ -149,18 +152,34 @@ jobs:
         working-directory: src/sdk/vidra-js
         run: npm test
 
-      # ---- TypeScript CLI ----
+      # The scaffolded app's vidra.config.ts imports @vidra-dev/sdk/config, and
+      # the CLI loads that file for real in the --plan step below. The package
+      # only exports dist/, so an unbuilt SDK surfaces as "Package subpath
+      # './config' is not defined by exports" rather than as a missing file.
+      - name: Build SDK
+        working-directory: src/sdk/vidra-js
+        run: npm run build
+
+      # ---- TypeScript CLI (npm workspace: vidra-cli, create-vidra-app, shared) ----
       - name: Install CLI dependencies
-        working-directory: src/cli/create-vidra-app
+        working-directory: src/cli
         run: npm ci || npm install
 
-      - name: Run CLI tests (unit + scaffold integration)
-        working-directory: src/cli/create-vidra-app
-        run: npm test
+      # tsup bundles without type-checking and vitest transpiles per file, so
+      # neither notices a call with a missing argument or a variable renamed on
+      # one side only. Both reached main that way and failed only in the smoke
+      # legs, minutes later and far from the cause.
+      - name: Type-check CLI packages
+        working-directory: src/cli
+        run: npm run typecheck --workspaces
 
-      - name: Build CLI
-        working-directory: src/cli/create-vidra-app
-        run: npm run build
+      - name: Run CLI tests (unit + scaffold integration)
+        working-directory: src/cli
+        run: npm test --workspaces
+
+      - name: Build CLI packages
+        working-directory: src/cli
+        run: npm run build --workspaces --if-present
 
       # ---- CLI behaviour on an unsupported platform ----
       #
@@ -170,7 +189,7 @@ jobs:
       - name: Assert the CLI rejects Linux as a build target
         run: |
           set +e
-          output=$(node src/cli/create-vidra-app/dist/cli.js build --target linux 2>&1)
+          output=$(node src/cli/vidra-cli/dist/cli.js build --target linux 2>&1)
           code=$?
           set -e
           echo "$output"
@@ -184,7 +203,7 @@ jobs:
       - name: Run vidra doctor
         run: |
           set +e
-          node src/cli/create-vidra-app/dist/cli.js doctor
+          node src/cli/vidra-cli/dist/cli.js doctor
           echo "doctor exit: $?"
 
       # `--plan` returns before the MAUI workload gate, so the preview renders
@@ -195,8 +214,8 @@ jobs:
           node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/index.js" \
             plan-smoke --app-id=com.vidra.plansmoke
           cd plan-smoke
-          for target in macos windows; do
-            output=$(node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" build --target "$target" --plan)
+          for target in macos windows android; do
+            output=$(node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" build --target "$target" --plan)
             echo "$output"
             echo "$output" | grep -q "nothing has run" || {
               echo "::error::--plan for $target did not render the dry-run footer"; exit 1; }
@@ -263,7 +282,7 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: |
-            src/cli/create-vidra-app/package-lock.json
+            src/cli/package-lock.json
             src/sdk/vidra-js/package-lock.json
 
       # NuGet restore dominates the per-OS jobs — on Windows the dogfood host
@@ -278,14 +297,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      # No xcode-select pin. There used to be one at 26.3, from when that was
-      # the newest Xcode on the image and the Catalyst reference assemblies
-      # already wanted a newer SDK than any Xcode present (MT0180) — pinning at
-      # least kept the rest of the toolchain on the best available. The image
-      # has moved on and the pin inverted: it held the runner at 26.3 while the
-      # current Catalyst pack requires the 26.5 SDK from Xcode 26.6, so the
-      # linker failed the build the pin was meant to protect. The image default
-      # satisfies the pack; log what we got rather than choosing for it.
+      # No xcode-select pin. There used to be one at 26.3, and it inverted: it
+      # held the runner on an older Xcode while the Catalyst pack required a
+      # newer SDK, so the linker failed the build the pin was meant to protect.
+      # The image default is the Xcode we link against. The workload set below
+      # is what has to stay within that Xcode's reach.
       - name: Log Xcode version (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -308,18 +324,23 @@ jobs:
 
       # ---- Template build smoke (requires MAUI workload) ----
       #
-      # The manifest is deliberately NOT pinned. `--skip-manifest-update` used to
-      # be here because the newest maccatalyst manifest wanted the SDK from
-      # Xcode 26.4 while macos-latest topped out at 26.3 (MT0180 in ILLink's
-      # Setup step); the image now ships 26.6, so the reason is gone — and the
-      # pin had become actively harmful. It held the Catalyst SDK pack at
-      # 26.0.11017, where `dotnet run` execs `$(AssemblyName).app` while the
-      # build produces `$(_AppBundleName).app` (dotnet/macios#26318, fixed in
-      # 26.2.10233+). CI was therefore the only place the app could not launch
-      # under `dotnet watch`, which is precisely what this job exists to prove.
+      # macOS pins the workload set. An unpinned install now resolves to
+      # Mac Catalyst 27.0.10722, and ILLink dies with MT0180 because that pack
+      # requires the Xcode 27 SDK while macos-latest still has Xcode 26.
+      # 10.0.303.1 is the newest set still on the 26.5 SDK, which Xcode 26.6
+      # can link. Do not replace this with `--skip-manifest-update`: that froze
+      # the pack at 26.0.11017, before the app-bundle name fix
+      # (dotnet/macios#26318, 26.2.10233+), and `dotnet watch` could not launch
+      # the app — the thing this job exists to prove. Windows does not link
+      # against the Catalyst SDK, so it keeps the latest set.
       - name: Install MAUI workload (${{ matrix.maui-workload }})
         shell: bash
-        run: dotnet workload install ${{ matrix.maui-workload }}
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            dotnet workload install ${{ matrix.maui-workload }} --version 10.0.303.1
+          else
+            dotnet workload install ${{ matrix.maui-workload }}
+          fi
 
       - name: Log installed workloads
         shell: bash
@@ -352,18 +373,18 @@ jobs:
           npm ci || npm install
           npm run build
 
-      - name: Build and link CLI
+      - name: Build CLI packages
         shell: bash
-        working-directory: src/cli/create-vidra-app
+        working-directory: src/cli
         run: |
           npm ci || npm install
-          npm run build
+          npm run build --workspaces --if-present
 
       - name: Run vidra doctor
         shell: bash
         run: |
           set +e
-          node src/cli/create-vidra-app/dist/cli.js doctor
+          node src/cli/vidra-cli/dist/cli.js doctor
           echo "doctor exit: $?"
 
       # The framework's own dogfood host is the only consumer of the aggregate
@@ -444,9 +465,9 @@ jobs:
       # template page (the E2E variant exits the process on success, which would
       # end the dev session immediately).
       #
-      # macOS only for now: the script tears the session down via POSIX process
-      # groups, which git-bash on the Windows runner does not provide. Windows
-      # dev-loop coverage needs a PowerShell counterpart.
+      # The bash script tears the session down via POSIX process groups, which
+      # git-bash on the Windows runner does not provide, so Windows runs its
+      # PowerShell counterpart in the next step.
       #
       # Every check in the script is a hard assertion, including the two that
       # used to be warnings — the app reaching readiness, and coming back up
@@ -460,8 +481,35 @@ jobs:
         run: |
           bash tests/ci/dev-loop-smoke.sh \
             "${{ runner.temp }}/vidra-smoke" \
-            "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+            "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             ${{ matrix.target }}
+
+      # The same checks on Windows, where the session runs under one cmd.exe that
+      # `taskkill /T` takes down. Both scripts require the page to answer a
+      # C# -> JS call, at start and after the relaunch for a bridge policy edit:
+      # readiness and the C# edit marker are printed by the host alone, so a
+      # WebView that never loads its page passes them. That is how `vidra dev`
+      # stopped working on Windows without CI noticing.
+      - name: Smoke the dev loop on Windows (vidra dev, a C# edit, a policy edit)
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          VIDRA_DEV_LOG: ${{ runner.temp }}\vidra-dev-session.log
+        run: |
+          ./tests/ci/dev-loop-smoke.ps1 -AppDir "${{ runner.temp }}\vidra-smoke" `
+            -Cli "$env:GITHUB_WORKSPACE\src\cli\vidra-cli\dist\cli.js" `
+            -Screenshot "${{ runner.temp }}\vidra-dev-session.png"
+
+      - name: Upload the Windows dev session
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: vidra-dev-session-windows
+          path: |
+            ${{ runner.temp }}/vidra-dev-session.log
+            ${{ runner.temp }}/vidra-dev-session.png
+          if-no-files-found: ignore
 
       # ---- Runtime E2E harness ----
       #
@@ -494,7 +542,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }} --plan
 
       # ---- Packaging smoke: run the real `vidra build` end-to-end ----
@@ -502,7 +550,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }} --verbose
 
       # ApplicationDisplayVersion -> CFBundleShortVersionString, and the derived
@@ -581,7 +629,7 @@ jobs:
         shell: bash
         run: |
           bash tests/ci/verify-macos-artifact.sh "$ARTIFACT" \
-            "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
+            "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js"
 
       - name: Launch the packaged app and prove the bridge works (macOS)
         timeout-minutes: 10
@@ -595,7 +643,7 @@ jobs:
         shell: pwsh
         run: |
           ./tests/ci/launch-windows-app.ps1 -Zip "$env:ARTIFACT" `
-            -Cli "$env:GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js"
+            -Cli "$env:GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js"
 
       # Uploaded here, while dist/ still holds exactly one file, rather than at
       # the end of the job. Everything below builds the same scaffold again into
@@ -653,7 +701,7 @@ jobs:
           # A real signing key, made by the command a publisher would run. The
           # public half goes into vidra.config.ts, which makes signatures mandatory
           # for this app — so the whole run also proves the signed path works.
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             keygen --out ota-signing-key.pem
           node -e "
             const fs = require('fs');
@@ -684,7 +732,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --app --target ${{ matrix.target }}
 
       - name: Locate the update-enabled app (macOS)
@@ -715,7 +763,7 @@ jobs:
           node "$(native "$GITHUB_WORKSPACE/tests/smoke/ota-e2e.mjs")" \
             --bin "$OTA_BIN" \
             --project "$(native "$PWD")" \
-            --cli "$(native "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js")" \
+            --cli "$(native "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js")" \
             --signing-key "$(native "$PWD/ota-signing-key.pem")" \
             --work "$(native "${{ runner.temp }}/ota-work")"
 
@@ -775,7 +823,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }}
           ls -la dist dist/feed
 
@@ -808,7 +856,7 @@ jobs:
         run: |
           node "$GITHUB_WORKSPACE/tests/ci/native-update-setup.mjs" \
             --project "$PWD" --name VidraSmoke --version 1.0.1
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }}
           ls -la dist/feed
           cat dist/feed/releases*.json
@@ -827,7 +875,7 @@ jobs:
         working-directory: ${{ runner.temp }}/vidra-smoke
         run: |
           before="$(ls dist/feed | sort | tr '\n' ' ')"
-          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/cli.js" \
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
             build --target ${{ matrix.target }} 2>&1 | tee rebuild.log
           grep -qi "already in the feed" rebuild.log || {
             echo "::error::expected the 'already in the feed' skip"; exit 1; }
@@ -919,3 +967,121 @@ jobs:
             ${{ runner.temp }}/vidra-smoke/dist/feed/RELEASES*
             ${{ runner.temp }}/vidra-smoke/dist/feed/*delta.nupkg
           if-no-files-found: ignore
+
+  android-emulator:
+    name: Android emulator smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: |
+            src/cli/package-lock.json
+            src/sdk/vidra-js/package-lock.json
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Android workload
+        run: dotnet workload install maui-android
+
+      - name: Build SDK, CLI, and local packages
+        run: |
+          npm ci --prefix src/sdk/vidra-js || npm install --prefix src/sdk/vidra-js
+          npm run build --prefix src/sdk/vidra-js
+          npm ci --prefix src/cli || npm install --prefix src/cli
+          npm run build --prefix src/cli --workspaces --if-present
+          ./pack-local.sh
+
+      - name: Scaffold Android smoke app
+        working-directory: ${{ runner.temp }}
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/create-vidra-app/dist/index.js" \
+            vidra-smoke --app-id=com.vidra.smoke
+          sed 's/__PROJECT_NAMESPACE__/VidraSmoke/' \
+            "$GITHUB_WORKSPACE/tests/smoke/ota-main-page.cs.in" \
+            > vidra-smoke/src/VidraSmoke.Host/MainPage.cs
+          (
+          cd vidra-smoke
+          node -e "
+            const fs = require('fs');
+            const config = fs.readFileSync('vidra.config.ts', 'utf8');
+            fs.writeFileSync(
+              'vidra.config.ts',
+              config.replace(
+                /updates:\\s*\\{\\s*feed:\\s*\"\"\\s*,?\\s*\\}/,
+                'updates: { feed: { web: \"http://127.0.0.1:8099/\" } }',
+              ),
+            );
+          "
+          )
+          npm ci --prefix vidra-smoke
+          npm ci --prefix vidra-smoke/ui
+
+      - name: Create Android release keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore "${{ runner.temp }}/vidra-release.jks" \
+            -storepass android -keypass android -alias release \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Vidra CI,O=Vidra,C=US"
+
+      - name: Build signed APK and AAB
+        working-directory: ${{ runner.temp }}/vidra-smoke
+        env:
+          VIDRA_ANDROID_KEYSTORE: ${{ runner.temp }}/vidra-release.jks
+          VIDRA_ANDROID_KEY_ALIAS: release
+          VIDRA_ANDROID_KEY_PASSWORD: android
+          VIDRA_ANDROID_STORE_PASSWORD: android
+          # Intent-extra controls stay gated by the manifest debuggable flag;
+          # this release-shaped smoke opts in explicitly.
+          VIDRA_ANDROID_DEBUGGABLE: "1"
+        run: |
+          node "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" \
+            build --target android --app
+          test -n "$(ls dist/*-android.apk)"
+          test -n "$(ls dist/*-android.aab)"
+
+      - name: Launch and prove bridge + OTA promotion/rollback
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            # Each line is a separate `sh -c`, so a variable set on one line
+            # is gone on the next, and a trailing backslash does not continue.
+            adb install -r ${{ runner.temp }}/vidra-smoke/dist/*-android.apk
+            adb reverse tcp:8099 tcp:8099
+            node "$GITHUB_WORKSPACE/tests/smoke/ota-e2e.mjs" --android-app-id com.vidra.smoke --project '${{ runner.temp }}/vidra-smoke' --cli "$GITHUB_WORKSPACE/src/cli/vidra-cli/dist/cli.js" --work '${{ runner.temp }}/android-ota-work' --port 8099
+
+      - name: Upload Android artifacts and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-smoke-artifacts
+          path: |
+            ${{ runner.temp }}/vidra-smoke/dist/*.apk
+            ${{ runner.temp }}/vidra-smoke/dist/*.aab
+          if-no-files-found: error

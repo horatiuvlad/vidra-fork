@@ -16,8 +16,10 @@ cd my-app
 npm run dev
 ```
 
-The generated project includes the `vidra` CLI as a local dependency. Use the
-provided npm scripts or run it through `npx`; no global install is required.
+The generated project depends on [`vidra-cli`](https://www.npmjs.com/package/vidra-cli),
+which provides the `vidra` command. This package is only needed to create the
+app; nothing depends on it afterwards. Use the provided npm scripts or run
+`vidra` through `npx`; no global install is required.
 
 ## Requirements
 

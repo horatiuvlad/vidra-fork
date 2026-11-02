@@ -15,6 +15,10 @@ public class VidraPage : ContentPage
 
     public VidraPage()
     {
+#if ANDROID
+        SafeAreaEdges = SafeAreaEdges.All;
+#endif
+
         AppWebView = new WebView
         {
             HorizontalOptions = LayoutOptions.Fill,
@@ -41,6 +45,15 @@ public class VidraPage : ContentPage
             }
         }
 
+#if ANDROID
+        // The Android lifecycle hook normally starts updates after MainActivity
+        // applies launch extras. Keep this idempotent fallback at the final
+        // ordering boundary: before this page's first WebView navigation.
+        IPlatformApplication.Current.Services
+            .GetService<VidraUpdateService>()
+            ?.StartAtLaunch();
+#endif
+
         LoadContent();
         AnnounceDevHostReady();
     }
@@ -54,25 +67,93 @@ public class VidraPage : ContentPage
     /// </summary>
     private static void AnnounceDevHostReady()
     {
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VIDRA_DEV_URL")))
+        if (!string.IsNullOrEmpty(VidraRuntimeSettings.Get(VidraRuntimeSettings.DevUrl)))
             Console.WriteLine("[vidra] host ready");
     }
 
     private void LoadContent()
     {
-        var devServerUrl = Environment.GetEnvironmentVariable("VIDRA_DEV_URL");
+        var devServerUrl = VidraRuntimeSettings.Get(VidraRuntimeSettings.DevUrl);
 
         if (!string.IsNullOrEmpty(devServerUrl))
         {
-            AppWebView.Source = new UrlWebViewSource { Url = devServerUrl };
+            NavigateWhenHandlerReady(devServerUrl);
         }
         else if (System.Diagnostics.Debugger.IsAttached)
         {
-            AppWebView.Source = new UrlWebViewSource { Url = "http://localhost:5173" };
+            NavigateWhenHandlerReady("http://localhost:5173");
         }
         else
         {
             Bridge.LoadProductionAssets(AppWebView);
         }
+    }
+
+    private void NavigateWhenHandlerReady(string url)
+    {
+        if (AppWebView.Handler is not null)
+        {
+            Navigate(url);
+            return;
+        }
+
+        EventHandler? onHandlerChanged = null;
+        onHandlerChanged = (_, _) =>
+        {
+            if (AppWebView.Handler is null)
+                return;
+
+            AppWebView.HandlerChanged -= onHandlerChanged;
+            Navigate(url);
+        };
+        AppWebView.HandlerChanged += onHandlerChanged;
+    }
+
+#if WINDOWS
+    /// <summary>
+    /// Navigates once the WebView2 has its CoreWebView2, the order
+    /// <c>LoadProductionAssetsCore</c> already follows on Windows.
+    /// </summary>
+    /// <remarks>
+    /// The bridge's Windows channel starts <c>EnsureCoreWebView2Async</c> from
+    /// its own <c>HandlerChanged</c> handler, which runs before this page's. A
+    /// <c>Source</c> set while that initialization is still pending is kept by
+    /// the control and never navigated: measured on Windows 11 with WebView2
+    /// 155, <c>WebView2.Source</c> read the dev server's URL for 48 seconds
+    /// while <c>CoreWebView2.Source</c> stayed <c>about:blank</c>, no
+    /// <c>Navigating</c> was raised, the window stayed blank and every C# to
+    /// JavaScript call timed out. Waiting for the same initialization first
+    /// makes the assignment an ordinary navigation.
+    /// </remarks>
+    private async void Navigate(string url)
+    {
+        if (AppWebView.Handler?.PlatformView is Microsoft.UI.Xaml.Controls.WebView2 webView2)
+        {
+            try
+            {
+                await webView2.EnsureCoreWebView2Async();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[vidra] WebView2 did not initialize ({ex.Message}); navigating to {url} anyway");
+            }
+        }
+
+        AppWebView.Source = new UrlWebViewSource { Url = url };
+    }
+#else
+    private void Navigate(string url) =>
+        AppWebView.Source = new UrlWebViewSource { Url = url };
+#endif
+
+    protected override bool OnBackButtonPressed()
+    {
+        if (AppWebView.CanGoBack)
+        {
+            AppWebView.GoBack();
+            return true;
+        }
+
+        return base.OnBackButtonPressed();
     }
 }

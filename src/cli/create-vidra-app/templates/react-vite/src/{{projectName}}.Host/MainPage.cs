@@ -6,6 +6,12 @@ public class MainPage : VidraPage
 {
     public MainPage()
     {
+        AppWebView.Navigated += OnFirstNavigated;
+    }
+
+    private void OnFirstNavigated(object? sender, WebNavigatedEventArgs e)
+    {
+        AppWebView.Navigated -= OnFirstNavigated;
         StartCounterTimer();
     }
 

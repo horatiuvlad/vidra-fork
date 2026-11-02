@@ -93,9 +93,11 @@ jobs:
           if ! npm view create-vidra-app version >/dev/null 2>&1; then
             echo "::error::could not reach npm to check whether $next is taken"; exit 1
           fi
-          if npm view "create-vidra-app@$next" version >/dev/null 2>&1; then
-            echo "::error::create-vidra-app@$next is already on npm"; exit 1
-          fi
+          for pkg in create-vidra-app vidra-cli @vidra-dev/sdk; do
+            if npm view "$pkg@$next" version >/dev/null 2>&1; then
+              echo "::error::$pkg@$next is already on npm"; exit 1
+            fi
+          done
 
           if ! nuget="$(curl -sSf "https://api.nuget.org/v3-flatcontainer/vidra.bridge/index.json")"; then
             echo "::error::could not reach nuget.org to check whether $next is taken"; exit 1

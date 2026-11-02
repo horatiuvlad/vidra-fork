@@ -1,0 +1,68 @@
+{
+  "name": "vidra-cli",
+  "version": "0.6.0",
+  "description": "The vidra command: dev, build, updates and doctor for Vidra apps (React + .NET MAUI)",
+  "type": "module",
+  "bin": {
+    "vidra": "bin/vidra.mjs"
+  },
+  "files": [
+    "bin/",
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "vidra",
+    "dotnet",
+    "csharp",
+    "dotnet-maui",
+    "maui",
+    "react",
+    "vue",
+    "svelte",
+    "cross-platform",
+    "desktop",
+    "electron-alternative",
+    "tauri-alternative",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rzamfiriu/vidra.git",
+    "directory": "src/cli/vidra-cli"
+  },
+  "homepage": "https://vidra.build",
+  "bugs": {
+    "url": "https://github.com/rzamfiriu/vidra/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "chalk": "^6.0.0",
+    "fs-extra": "^11.2.0",
+    "jiti": "^2.7.0",
+    "prompts": "^2.4.2",
+    "typescript-compiler-api": "npm:typescript@^5.9.3"
+  },
+  "devDependencies": {
+    "@vidra-dev/cli-shared": "*",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.20.0",
+    "@types/prompts": "^2.4.9",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

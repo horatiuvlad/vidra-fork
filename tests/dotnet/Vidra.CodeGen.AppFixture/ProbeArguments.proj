@@ -1,0 +1,35 @@
+<Project>
+
+  <!--
+    The probe directories codegen receives come from %(Directory), which ends in
+    a separator on every OS. Quoted on the command line, a trailing backslash
+    escapes the closing quote on Windows, the arguments after it run together,
+    and codegen loses its output directory and writes into the project's own.
+    A trailing slash is harmless where it is produced, which is exactly why the
+    Linux tier asserts on the separator rather than on the Windows symptom.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <TargetPath>$(MSBuildThisFileDirectory)bin/probe-fixture.dll</TargetPath>
+    <VidraTsOutputDir>$(MSBuildThisFileDirectory)generated-probe</VidraTsOutputDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Two references from one package directory, one from another. -->
+    <ReferencePath Include="$(MSBuildThisFileDirectory)probe/one/A.dll" />
+    <ReferencePath Include="$(MSBuildThisFileDirectory)probe/one/B.dll" />
+    <ReferencePath Include="$(MSBuildThisFileDirectory)probe/two/C.dll" />
+  </ItemGroup>
+
+  <Import Project="../../../src/bridge/Vidra.Bridge/Vidra.CodeGen.targets" />
+
+  <Target Name="VerifyProbeArguments" DependsOnTargets="_VidraCodeGenArguments">
+    <Error Condition="$(_VidraCodeGenArgs.Contains('\&quot;')) Or $(_VidraCodeGenArgs.Contains('/&quot;'))"
+           Text="A quoted codegen argument ends in a directory separator, which Windows reads as an escaped quote: $(_VidraCodeGenArgs)" />
+    <Error Condition="'@(_VidraCodeGenProbe->Count())' != '2'"
+           Text="Expected each referenced directory once, got: @(_VidraCodeGenProbe)" />
+    <Message Importance="high" Text="Codegen probe arguments are safe to quote: @(_VidraCodeGenProbe)" />
+  </Target>
+
+</Project>

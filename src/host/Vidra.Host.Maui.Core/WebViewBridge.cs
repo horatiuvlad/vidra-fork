@@ -15,7 +15,8 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
     /// <summary>
     /// Name of the native message channel. JS posts to
     /// <c>window.webkit.messageHandlers.vidra</c> (WKWebView) or
-    /// <c>window.chrome.webview</c> (WebView2); see the platform partials.
+    /// <c>window.chrome.webview</c> (WebView2), or
+    /// <c>window.vidra</c> (Android WebView); see the platform partials.
     /// Kept in sync with <c>NATIVE_CHANNEL</c> in the JS SDK transport.
     /// </summary>
     private const string ChannelName = "vidra";
@@ -25,6 +26,15 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
     private readonly ILogger<WebViewBridge> _logger;
     private readonly ConcurrentDictionary<string, byte> _reportedDeniedEvents = new();
     private readonly PendingJsCallRegistry _pendingJsCalls = new();
+
+    /// <summary>
+    /// Completed once the first page has finished loading and been handed the
+    /// bridge handshake, which is the earliest point at which a call into JS
+    /// can find <c>window.__vidra_invoke</c> / <c>__vidra_onevent</c>.
+    /// </summary>
+    private readonly TaskCompletionSource _pageLoaded =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     private WebView? _webView;
 
     public WebViewBridge(
@@ -143,6 +153,22 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
 
     private async void OnNavigated(object? sender, WebNavigatedEventArgs e)
     {
+#if ANDROID
+        if (!_androidNativeChannelAvailable)
+        {
+            try
+            {
+                await PushToJsAsync(
+                    "document.body.innerHTML='<main style=\"font-family:sans-serif;padding:2rem\"><h1>Android System WebView is outdated</h1><p>Update it to enable Vidra\\'s secure native bridge.</p></main>'");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to render the Android WebView compatibility diagnostic.");
+            }
+            return;
+        }
+#endif
+
         // Both pushes are guarded, and the watcher starts either way. This is an
         // `async void` event handler, so an escaping exception is an unhandled
         // one; and on Windows the first push is a real thrower —
@@ -171,6 +197,10 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             System.Diagnostics.Debug.WriteLine(
                 $"[Vidra] Bridge protocol initialization failed: {ex.Message}");
         }
+
+        // Released whether or not the handshake pushed: a call made now fails
+        // with the page's own answer, which says more than "not loaded yet".
+        _pageLoaded.TrySetResult();
 
         if (BundleBooted is not null)
             _ = WatchBundleBootAsync();
@@ -220,6 +250,21 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
 
     private async void OnNavigating(object? sender, WebNavigatingEventArgs e)
     {
+#if ANDROID
+        // Android's supported transport is origin-scoped WebMessageListener.
+        // The scheme fallback cannot identify a subframe's origin, so accepting
+        // it would let embedded remote content invoke granted native methods.
+        // Consequently this path is never Android's bundle-boot proof; the
+        // message listener or SDK initialization probe owns that signal.
+        if (e.Url.StartsWith("vidra://", StringComparison.OrdinalIgnoreCase))
+        {
+            e.Cancel = true;
+            _logger.LogWarning(
+                "Rejected Android custom-scheme bridge traffic; update Android System WebView to use the secure native channel.");
+            return;
+        }
+#endif
+
         if (e.Url.StartsWith("vidra://reverse", StringComparison.OrdinalIgnoreCase))
         {
             e.Cancel = true;
@@ -283,6 +328,8 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
             return;
         }
 
+        await WaitForPageAsync(contract, member, ct);
+
         var bridgeEvent = new BridgeEvent
         {
             Contract = contract,
@@ -291,6 +338,36 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
         };
         var json = BridgeSerializer.Serialize(bridgeEvent);
         await PushToJsAsync($"window.__vidra_onevent({json})");
+    }
+
+    /// <summary>
+    /// Holds a call into JS until the first page has loaded, for up to
+    /// <see cref="VidraBridgeOptions.JsContractTimeout"/>, after which it fails
+    /// the same way a page that never answers does.
+    /// </summary>
+    /// <remarks>
+    /// Host code is free to call into JS as soon as it has a <see cref="VidraPage"/>,
+    /// and the template's counter does so on a timer started in the page's
+    /// constructor. The page is not there yet: on Windows, WebView2's first
+    /// initialization on a cold machine can outlast that timer's 10s, and
+    /// <c>EvaluateJavaScriptAsync</c> then throws "a valid CoreWebView2 is not
+    /// present"; on every platform, a call that lands before the document's
+    /// scripts ran finds no <c>window.__vidra_invoke</c>. Waiting here turns
+    /// both into an ordinary call that completes once the page is up.
+    /// </remarks>
+    private async Task WaitForPageAsync(string contract, string member, CancellationToken ct)
+    {
+        if (_pageLoaded.Task.IsCompleted)
+            return;
+
+        try
+        {
+            await _pageLoaded.Task.WaitAsync(_options.JsContractTimeout, ct);
+        }
+        catch (TimeoutException)
+        {
+            throw new JsContractTimeoutException(contract, member, _options.JsContractTimeout);
+        }
     }
 
     public async Task CallJsAsync(JsMethodToken method, CancellationToken ct = default)
@@ -349,6 +426,8 @@ public sealed partial class WebViewBridge : IJsCallbackChannel, IUnsafeJsCallbac
         JsonElement? payload,
         CancellationToken ct)
     {
+        await WaitForPageAsync(contract, member, ct);
+
         var pending = _pendingJsCalls.Create(contract, member);
 
         try

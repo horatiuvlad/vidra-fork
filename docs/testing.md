@@ -31,10 +31,10 @@ We follow a pyramid:
 | Unit        | `tests/dotnet/Vidra.Modules.Windowing.Tests`                | `ubuntu-latest`       |
 | Unit        | `tests/dotnet/Vidra.Modules.Essentials.Tests`               | `ubuntu-latest`       |
 | Unit        | `src/sdk/vidra-js` Vitest (`client`, `transport`)           | `ubuntu-latest`       |
-| Unit        | `src/cli/create-vidra-app` Vitest (`utils`, `project`, ...) | `ubuntu-latest`       |
+| Unit        | `src/cli` workspace Vitest (`utils`, `project`, ...)        | `ubuntu-latest`       |
 | Contract    | `tests/contract/fixtures/*.json` via `ContractFixtureTests` | `ubuntu-latest`       |
 | Contract    | Same fixtures via SDK `contract.test.ts`                    | `ubuntu-latest`       |
-| Integration | CLI `scaffold.integration.test.ts` (tmpdir scaffold)        | `ubuntu-latest`       |
+| Integration | `create-vidra-app` `scaffold.integration.test.ts` (tmpdir)  | `ubuntu-latest`       |
 | Integration | `Vidra.CodeGen.AppFixture` build + `VidraCodeGenCheck`      | `ubuntu-latest`       |
 | Integration | `AggregateScope.proj` — multi-assembly, core-scope codegen  | `ubuntu-latest`       |
 | Guard rail  | `scripts/version.mjs check` — one version across npm + NuGet | `ubuntu-latest`       |
@@ -44,6 +44,7 @@ We follow a pyramid:
 | Smoke       | Dogfood host build leaves the committed built-in contracts unchanged | `macos-latest` |
 | Smoke       | `vidra build` → signature, hardened runtime + entitlements  | `windows-latest`, `macos-latest` |
 | Smoke       | **Runtime E2E** — launch the packaged app, assert a C#↔JS round-trip | `windows-latest`, `macos-latest` |
+| Smoke       | Android signed APK/AAB + emulator bridge and OTA promotion/rollback | `ubuntu-latest` |
 | Smoke       | **Dev loop** — `vidra dev` starts, Vite serves, the host builds under `dotnet watch` | `macos-latest` |
 | Guard rail  | CLI rejects `--target linux`; `--plan` renders; `doctor` runs | `ubuntu-latest`       |
 
@@ -63,6 +64,13 @@ credentials exist.
 
 ### Running locally
 
+`pack-local.sh` and an unqualified build of a multi-target MAUI project compile
+Android alongside the host's desktop TFM. Even on macOS or Windows, those
+commands require the Android workload, JDK 17, and Android SDK. Target-specific
+`vidra build --target macos|windows` remains desktop-only. Run
+`vidra doctor --target android` before a full local pack to check the additional
+toolchain.
+
 ```bash
 # C# unit + contract + codegen
 dotnet test tests/dotnet/Vidra.Bridge.Tests/Vidra.Bridge.Tests.csproj
@@ -77,8 +85,9 @@ dotnet test tests/dotnet/Vidra.Modules.Essentials.Tests/Vidra.Modules.Essentials
 # SDK
 cd src/sdk/vidra-js && npm install && npm test
 
-# CLI (includes scaffold-into-tmpdir integration)
-cd src/cli/create-vidra-app && npm install && npm test
+# CLI packages: vidra-cli, create-vidra-app and their shared modules, one npm
+# workspace (includes scaffold-into-tmpdir integration)
+cd src/cli && npm install && npm test --workspaces
 
 # Bridge echo-ping smoke (any OS)
 dotnet build tests/dotnet/Vidra.Bridge.Smoke/Vidra.Bridge.Smoke.csproj -c Release
@@ -87,14 +96,20 @@ VIDRA_SMOKE_CONFIG=Release node tests/smoke/echo-ping.mjs
 # Runtime end-to-end: launch a packaged app and prove the bridge works.
 # Run after `vidra build` on the matching OS. See tests/ci/README.md.
 bash tests/ci/verify-macos-artifact.sh dist/MyApp-0.1.0-macos.dmg \
-  src/cli/create-vidra-app/dist/cli.js                             # macOS
+  src/cli/vidra-cli/dist/cli.js                             # macOS
 bash tests/ci/launch-macos-app.sh      dist/MyApp-0.1.0-macos.dmg   # macOS
 ./tests/ci/launch-windows-app.ps1 -Zip dist\MyApp-0.1.0-windows.zip `
-  -Cli src\cli\create-vidra-app\dist\cli.js                          # Windows
+  -Cli src\cli\vidra-cli\dist\cli.js                          # Windows
 
 # Dev loop: `vidra dev` + the C# reload-on-save loop (macOS)
 bash tests/ci/dev-loop-smoke.sh <app-dir> <path/to/cli.js> macos
 ```
+
+Android release checks should additionally cover notification permission on API
+33+, rotation without WebView recreation, background/resume, hardware back
+navigation, picker files copied into app-scoped cache, and web-bundle
+promotion/rollback across an app upgrade. `appWindow.getSupport()` must report
+only `getCurrent` on Android.
 
 ### Updating code-gen snapshots
 

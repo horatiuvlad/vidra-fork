@@ -1,11 +1,10 @@
 {
   "name": "create-vidra-app",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "description": "Scaffold a new Vidra application (React + .NET MAUI)",
   "type": "module",
   "bin": {
-    "create-vidra-app": "./bin/create-vidra-app.mjs",
-    "vidra": "./bin/vidra.mjs"
+    "create-vidra-app": "bin/create-vidra-app.mjs"
   },
   "files": [
     "bin/",
@@ -15,6 +14,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build"
@@ -33,8 +33,7 @@
     "desktop",
     "electron-alternative",
     "tauri-alternative",
-    "scaffold",
-    "cli"
+    "scaffold"
   ],
   "repository": {
     "type": "git",
@@ -49,14 +48,16 @@
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "chalk": "^6.0.0",
     "fs-extra": "^11.2.0",
-    "jiti": "^2.7.0",
-    "prompts": "^2.4.2",
-    "typescript-compiler-api": "npm:typescript@^5.9.3"
+    "prompts": "^2.4.2"
   },
   "devDependencies": {
+    "@vidra-dev/cli-shared": "*",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^22.20.0",
     "@types/prompts": "^2.4.9",

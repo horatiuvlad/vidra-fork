@@ -2,11 +2,12 @@
 
 [<img src=".github/assets/vidra-logo-green.png" alt="Vidra" width="320">](https://vidra.build)
 
-**Build cross-platform desktop apps with any web UI and a C#/.NET native layer.**
+**Build cross-platform apps with any web UI and a C#/.NET native layer.**
 
 [Documentation](https://vidra.build/docs/) · [Getting started](https://vidra.build/docs/getting-started/) · [Bridge guide](https://vidra.build/docs/bridge/javascript-to-csharp/)
 
 [![create-vidra-app on npm](https://img.shields.io/npm/v/create-vidra-app?label=create-vidra-app&color=cb3837&logo=npm)](https://www.npmjs.com/package/create-vidra-app)
+[![vidra-cli on npm](https://img.shields.io/npm/v/vidra-cli?label=vidra-cli&color=cb3837&logo=npm)](https://www.npmjs.com/package/vidra-cli)
 [![@vidra-dev/sdk on npm](https://img.shields.io/npm/v/%40vidra-dev%2Fsdk?label=%40vidra-dev%2Fsdk&color=cb3837&logo=npm)](https://www.npmjs.com/package/@vidra-dev/sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -23,7 +24,7 @@ keep both sides in sync.
 - **Use the web framework you already know.** No XAML or Razor lock-in.
 - **Keep native code in .NET.** Reuse C# libraries, domain logic, and team skills.
 - **Share typed contracts.** C# declarations generate the APIs used on both sides.
-- **Ship a lightweight host.** Vidra uses WebView2 on Windows and WKWebView on macOS.
+- **Ship a lightweight host.** Vidra uses the system WebView on Windows, macOS, and Android.
 
 ## Quick start
 
@@ -52,8 +53,15 @@ Repository-specific contributor notes live in [`docs/`](docs/).
 
 ## Platform support
 
-Windows and macOS are currently supported. Windows targets must be built on
-Windows; macOS targets require Xcode and must be built on macOS.
+Windows, macOS, and Android are supported. Windows targets must be built on
+Windows; macOS targets require Xcode and must be built on macOS. Android targets
+can be built on Windows, macOS, or Linux with JDK 17 and the Android SDK.
+
+Vidra's MAUI projects include Android TFMs on macOS and Windows too. A
+target-specific `vidra build --target macos|windows` only needs that desktop
+workload, but a full `dotnet build`, `dotnet pack`, or `./pack-local.sh` builds
+every listed TFM and therefore also needs the Android workload, JDK 17, and the
+Android SDK.
 
 ## Contributing
 

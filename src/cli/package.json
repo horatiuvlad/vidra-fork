@@ -1,0 +1,10 @@
+{
+  "name": "vidra-cli-workspace",
+  "private": true,
+  "description": "npm workspace for the Vidra CLI packages. Install and test from here.",
+  "workspaces": [
+    "shared",
+    "vidra-cli",
+    "create-vidra-app"
+  ]
+}
